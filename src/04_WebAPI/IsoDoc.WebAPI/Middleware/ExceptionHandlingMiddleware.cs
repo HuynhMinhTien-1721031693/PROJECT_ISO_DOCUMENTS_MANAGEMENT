@@ -39,7 +39,13 @@ public sealed class ExceptionHandlingMiddleware
                 method = ctx.Request.Method,
                 path = ctx.Request.Path.Value,
                 query = ctx.Request.QueryString.Value,
-                isAuthenticated = ctx.User?.Identity?.IsAuthenticated ?? false
+                isAuthenticated = ctx.User?.Identity?.IsAuthenticated ?? false,
+                hasAuthHeader = ctx.Request.Headers.ContainsKey("Authorization"),
+                authHeaderScheme = ctx.Request.Headers.TryGetValue("Authorization", out var authHeader)
+                    ? authHeader.ToString().Split(' ').FirstOrDefault()
+                    : null,
+                contentType = ctx.Request.ContentType,
+                contentLength = ctx.Request.ContentLength
             });
         #endregion
         try

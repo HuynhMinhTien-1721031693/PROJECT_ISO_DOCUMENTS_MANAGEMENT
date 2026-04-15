@@ -4,6 +4,8 @@ using IsoDoc.Application.Documents.Queries.GetPendingApprovals;
 using IsoDoc.Application.Documents.Queries.SearchDocuments;
 using IsoDoc.Domain.Enums;
 using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -108,10 +110,39 @@ public sealed class AuthController : ApiControllerBase
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct = default)
     {
+        if (request is null)
+            request = await TryReadLoginRequestFromBodyAsync(ct) ?? new LoginRequest();
+
+        #region agent log
+        WriteDebugLog(
+            "h17",
+            "IsoDoc.WebAPI/Controllers/OtherControllers.cs:AuthController:Login:entry",
+            "Login request payload received",
+            new
+            {
+                hasRequest = request is not null,
+                emailIsEmpty = string.IsNullOrWhiteSpace(request?.Email),
+                passwordIsEmpty = string.IsNullOrWhiteSpace(request?.Password)
+            });
+        #endregion
         if (request is null || string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
+        {
+            #region agent log
+            WriteDebugLog(
+                "h17",
+                "IsoDoc.WebAPI/Controllers/OtherControllers.cs:AuthController:Login:invalid-payload",
+                "Login payload invalid",
+                new
+                {
+                    hasRequest = request is not null,
+                    emailIsEmpty = string.IsNullOrWhiteSpace(request?.Email),
+                    passwordIsEmpty = string.IsNullOrWhiteSpace(request?.Password)
+                });
+            #endregion
             return Problem(
                 detail: "Email va mat khau la bat buoc.",
                 statusCode: StatusCodes.Status400BadRequest);
+        }
 
         var options = _configuration.GetSection(AuthOptions.Section).Get<AuthOptions>() ?? new AuthOptions();
         var emailKey = request.Email.Trim().ToLowerInvariant();
@@ -130,7 +161,16 @@ public sealed class AuthController : ApiControllerBase
 
         var user = ResolveUser(request.Email);
         if (user is null)
+        {
+            #region agent log
+            WriteDebugLog(
+                "h17",
+                "IsoDoc.WebAPI/Controllers/OtherControllers.cs:AuthController:Login:user-not-found",
+                "Login rejected because user not found",
+                new { email = request.Email.Trim().ToLowerInvariant() });
+            #endregion
             return Unauthorized();
+        }
 
         if (!VerifyPassword(request.Password, user.Password, options))
         {
@@ -171,6 +211,62 @@ public sealed class AuthController : ApiControllerBase
             ExpiresIn = 3600,
             TokenType = "Bearer"
         });
+    }
+
+    private async Task<LoginRequest?> TryReadLoginRequestFromBodyAsync(CancellationToken ct)
+    {
+        try
+        {
+            Request.EnableBuffering();
+            Request.Body.Position = 0;
+            using var reader = new StreamReader(Request.Body, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+            var raw = await reader.ReadToEndAsync(ct);
+            Request.Body.Position = 0;
+
+            if (string.IsNullOrWhiteSpace(raw))
+                return null;
+
+            var parsed = JsonSerializer.Deserialize<LoginRequest>(raw);
+            if (parsed is not null)
+                return parsed;
+
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.ValueKind is JsonValueKind.String)
+            {
+                var inner = doc.RootElement.GetString();
+                if (!string.IsNullOrWhiteSpace(inner))
+                    return JsonSerializer.Deserialize<LoginRequest>(inner);
+            }
+        }
+        catch
+        {
+            // Keep authentication flow resilient; validation below handles null/empty values.
+        }
+
+        return null;
+    }
+
+    private static void WriteDebugLog(string hypothesisId, string location, string message, object data)
+    {
+        try
+        {
+            const string debugLogPath = @"D:\HuynhMinhTien\CONG NGHE .NET\PROJECT_ISO_DOCUMENTS_MANAGEMENT\debug-b9f138.log";
+            var payload = new
+            {
+                sessionId = "b9f138",
+                runId = "pre-fix-4",
+                hypothesisId,
+                location,
+                message,
+                data,
+                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            };
+            System.IO.File.AppendAllText(debugLogPath, JsonSerializer.Serialize(payload) + Environment.NewLine);
+        }
+        catch
+        {
+            // Keep auth endpoint resilient during debug logging.
+        }
     }
 
     [HttpPost("refresh")]

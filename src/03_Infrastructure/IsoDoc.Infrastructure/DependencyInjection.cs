@@ -96,16 +96,23 @@ public static class DependencyInjection
 
         var redisConnection = configuration.GetConnectionString("Redis");
         if (string.IsNullOrWhiteSpace(redisConnection))
-            redisConnection = "localhost:6379";
-        services.AddSingleton<IConnectionMultiplexer>(_ =>
         {
-            var options = ConfigurationOptions.Parse(redisConnection);
-            options.AbortOnConnectFail = false;
-            return ConnectionMultiplexer.Connect(options);
-        });
-        services.AddScoped<Cache.RedisCacheService>();
-        services.AddScoped<ICacheService>(sp => sp.GetRequiredService<Cache.RedisCacheService>());
-        services.AddScoped<IRedisCacheService>(sp => sp.GetRequiredService<Cache.RedisCacheService>());
+            services.AddSingleton<InMemory.InMemoryCacheService>();
+            services.AddScoped<ICacheService>(sp => sp.GetRequiredService<InMemory.InMemoryCacheService>());
+            services.AddScoped<IRedisCacheService>(sp => sp.GetRequiredService<InMemory.InMemoryCacheService>());
+        }
+        else
+        {
+            services.AddSingleton<IConnectionMultiplexer>(_ =>
+            {
+                var options = ConfigurationOptions.Parse(redisConnection);
+                options.AbortOnConnectFail = false;
+                return ConnectionMultiplexer.Connect(options);
+            });
+            services.AddScoped<Cache.RedisCacheService>();
+            services.AddScoped<ICacheService>(sp => sp.GetRequiredService<Cache.RedisCacheService>());
+            services.AddScoped<IRedisCacheService>(sp => sp.GetRequiredService<Cache.RedisCacheService>());
+        }
 
         var jwtSection = configuration.GetSection(JwtOptions.Section);
         if (!jwtSection.Exists())
