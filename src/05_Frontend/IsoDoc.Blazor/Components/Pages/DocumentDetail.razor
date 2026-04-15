@@ -1,0 +1,72 @@
+@page "/documents/{Id:guid}"
+@attribute [Authorize]
+@inject DocumentApiService DocumentApiService
+
+<h1>Document Detail</h1>
+
+@if (Busy)
+{
+    <p class="tiny">Đang tải chi tiết tài liệu...</p>
+}
+else if (!string.IsNullOrWhiteSpace(Error))
+{
+    <p class="error-banner">@Error</p>
+}
+else if (Document is null)
+{
+    <p>Không tìm thấy tài liệu.</p>
+}
+else
+{
+    <div class="card detail-grid">
+        <div><b>Code:</b> @Document.DocumentCode</div>
+        <div><b>Title:</b> @Document.Title</div>
+        <div><b>ISO:</b> @Document.IsoStandard</div>
+        <div><b>Category:</b> @Document.Category</div>
+        <div><b>Status:</b> <StatusBadge Status="@Document.Status" /></div>
+        <div><b>Owner:</b> @Document.OwnerName</div>
+        <div><b>Version:</b> @Document.CurrentVersion</div>
+        <div><b>Department:</b> @Document.DepartmentName</div>
+        <div class="full"><b>Description:</b> @Document.Description</div>
+    </div>
+
+    <section class="card" style="margin-top: 14px;">
+        <h2 style="margin-bottom: 8px;">Version History</h2>
+        <ul class="simple-list">
+            @if (Document.Versions.Count == 0)
+            {
+                <li>Không có dữ liệu version.</li>
+            }
+            else
+            {
+                @foreach (var version in Document.Versions)
+                {
+                    <li>
+                        <div>
+                            <b>@version.FileType</b>
+                            <div class="tiny">@version.UploadedByName • @version.UploadedAt.ToLocalTime():dd/MM/yyyy HH:mm</div>
+                        </div>
+                        <span>@version.FileSizeFormatted</span>
+                    </li>
+                }
+            }
+        </ul>
+    </section>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private DocumentDto? Document { get; set; }
+    private string Error { get; set; } = string.Empty;
+    private bool Busy { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        Busy = true;
+        var (item, error) = await DocumentApiService.GetByIdAsync(Id);
+        Busy = false;
+        Document = item;
+        Error = error ?? string.Empty;
+    }
+}

@@ -1,0 +1,17 @@
+@page "/settings"
+@attribute [Authorize]
+@inject IConfiguration Configuration
+
+<h1>Settings</h1>
+<p class="muted">Thông tin cấu hình FE phục vụ demo và vận hành.</p>
+
+<div class="card detail-grid" style="margin-top: 12px;">
+    <div><b>API Base URL:</b> @ApiBaseUrl</div>
+    <div><b>Environment:</b> @EnvironmentName</div>
+    <div class="full"><b>Gợi ý:</b> Cập nhật `appsettings.json` nếu backend chạy cổng khác.</div>
+</div>
+
+@code {
+    private string ApiBaseUrl => Configuration["Api:BaseUrl"] ?? "(not configured)";
+    private string EnvironmentName => Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production";
+}

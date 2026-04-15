@@ -1,0 +1,19 @@
+﻿<Router AppAssembly="typeof(Program).Assembly">
+    <Found Context="routeData">
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
+            <NotAuthorized>
+                <LayoutView Layout="typeof(Layout.MainLayout)">
+                    <p class="error-banner">Bạn chưa đăng nhập hoặc không có quyền truy cập trang này.</p>
+                    <a class="btn-primary-link" href="/login">Đi tới trang đăng nhập</a>
+                </LayoutView>
+            </NotAuthorized>
+        </AuthorizeRouteView>
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+    <NotFound>
+        <LayoutView Layout="typeof(Layout.MainLayout)">
+            <h3>Not Found</h3>
+            <p>Nội dung bạn tìm kiếm không tồn tại.</p>
+        </LayoutView>
+    </NotFound>
+</Router>

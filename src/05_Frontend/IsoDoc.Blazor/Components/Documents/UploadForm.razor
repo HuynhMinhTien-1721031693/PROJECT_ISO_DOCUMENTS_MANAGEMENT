@@ -1,0 +1,77 @@
+<EditForm Model="Model" OnValidSubmit="Submit">
+    <DataAnnotationsValidator />
+    <ValidationSummary />
+
+    <div class="upload-grid card">
+        <div class="field">
+            <label>Title</label>
+            <InputText @bind-Value="Model.Title" />
+        </div>
+        <div class="field">
+            <label>Document Code</label>
+            <InputText @bind-Value="Model.DocumentCode" />
+        </div>
+        <div class="field">
+            <label>ISO Standard</label>
+            <InputSelect @bind-Value="Model.Standard">
+                <option>ISO9001</option>
+                <option>ISO45001</option>
+                <option>ISO27001</option>
+            </InputSelect>
+        </div>
+        <div class="field">
+            <label>Category</label>
+            <InputSelect @bind-Value="Model.Category">
+                <option>Policy</option>
+                <option>Procedure</option>
+                <option>WorkInstruction</option>
+                <option>Form</option>
+                <option>Record</option>
+                <option>Manual</option>
+                <option>Specification</option>
+            </InputSelect>
+        </div>
+        <div class="field full">
+            <label>Description</label>
+            <InputTextArea @bind-Value="Model.Description" />
+        </div>
+        <div class="field full">
+            <label>Change Note</label>
+            <InputTextArea @bind-Value="Model.ChangeNote" />
+        </div>
+        <div class="field full">
+            <label>Tags (comma-separated)</label>
+            <InputText @bind-Value="Model.TagsRaw" />
+        </div>
+        <div class="field full">
+            <label>File (PDF, DOCX, XLSX; max 50MB)</label>
+            <InputFile OnChange="OnFileChange" />
+        </div>
+        @if (!string.IsNullOrWhiteSpace(Error))
+        {
+            <p class="error-banner full">@Error</p>
+        }
+        <div class="full">
+            <button class="btn" type="submit" disabled="@Busy">@ButtonText</button>
+        </div>
+    </div>
+</EditForm>
+
+@code {
+    [Parameter] public UploadFormModel Model { get; set; } = new();
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public EventCallback<IBrowserFile?> FileChanged { get; set; }
+    [Parameter] public EventCallback OnSubmit { get; set; }
+
+    private string ButtonText => Busy ? "Uploading..." : "Upload Document";
+
+    private async Task OnFileChange(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        await FileChanged.InvokeAsync(file);
+    }
+
+    private async Task Submit() => await OnSubmit.InvokeAsync();
+}
+

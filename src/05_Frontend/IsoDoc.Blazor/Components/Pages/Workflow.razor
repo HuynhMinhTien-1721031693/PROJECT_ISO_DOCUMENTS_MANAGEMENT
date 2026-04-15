@@ -1,0 +1,78 @@
+@page "/workflow"
+@attribute [Authorize]
+@inject WorkflowApiService WorkflowApiService
+
+<h1>Pending Workflow</h1>
+<p class="muted">Dành cho vai trò approver.</p>
+
+@if (!string.IsNullOrWhiteSpace(Error))
+{
+    <p class="error-banner" style="margin: 10px 0;">@Error</p>
+}
+
+<div class="card">
+    <table class="doc-table">
+        <thead>
+            <tr>
+                <th>Document</th>
+                <th>ISO</th>
+                <th>Submitted By</th>
+                <th>Step</th>
+                <th>Days Waiting</th>
+                <th>Decision</th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (Items.Count == 0)
+            {
+                <tr><td colspan="6">Không có task workflow.</td></tr>
+            }
+            else
+            {
+                @foreach (var item in Items)
+                {
+                    <tr>
+                        <td>@item.DocumentCode - @item.DocumentTitle</td>
+                        <td>@item.IsoStandard</td>
+                        <td>@item.SubmittedByName</td>
+                        <td>@item.StepOrder/@item.TotalSteps</td>
+                        <td>@item.DaysWaiting</td>
+                        <td class="workflow-actions">
+                            <button class="btn" @onclick='() => Decide(item.WorkflowId, "Approved")'>Approve</button>
+                            <button class="btn secondary" @onclick='() => Decide(item.WorkflowId, "Rejected")'>Reject</button>
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private IReadOnlyList<PendingApprovalDto> Items { get; set; } = Array.Empty<PendingApprovalDto>();
+    private string Error { get; set; } = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var (items, _, error) = await WorkflowApiService.GetPendingAsync();
+        Items = items;
+        Error = error ?? string.Empty;
+    }
+
+    private async Task Decide(Guid workflowId, string decision)
+    {
+        var (ok, error) = await WorkflowApiService.DecideAsync(
+            workflowId,
+            decision,
+            $"{decision} by Blazor UI");
+        if (!ok)
+            Error = error ?? "Không thể ghi quyết định.";
+        else
+            await LoadAsync();
+    }
+}

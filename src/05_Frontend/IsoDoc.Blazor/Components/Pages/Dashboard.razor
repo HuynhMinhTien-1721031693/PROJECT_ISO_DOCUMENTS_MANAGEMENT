@@ -1,0 +1,99 @@
+@page "/"
+@attribute [Authorize]
+@inject DocumentApiService DocumentApiService
+@inject WorkflowApiService WorkflowApiService
+
+<h1>Dashboard</h1>
+<p class="muted">Tổng quan tài liệu ISO và tiến độ duyệt.</p>
+
+@if (!string.IsNullOrWhiteSpace(Error))
+{
+    <p class="error-banner" style="margin: 12px 0;">@Error</p>
+}
+
+<div class="kpi-grid">
+    <article class="card kpi-card">
+        <h3>Total Documents</h3>
+        <strong>@TotalDocuments</strong>
+    </article>
+    <article class="card kpi-card">
+        <h3>Draft</h3>
+        <strong>@DraftCount</strong>
+    </article>
+    <article class="card kpi-card">
+        <h3>Under Review</h3>
+        <strong>@ReviewCount</strong>
+    </article>
+    <article class="card kpi-card">
+        <h3>Pending Approvals</h3>
+        <strong>@PendingApprovals</strong>
+    </article>
+</div>
+
+<div class="dashboard-grid">
+    <section class="card">
+        <h2 style="margin-bottom: 12px;">Recent Documents</h2>
+        <ul class="simple-list">
+            @if (RecentDocuments.Count == 0)
+            {
+                <li>Chưa có dữ liệu.</li>
+            }
+            else
+            {
+                @foreach (var item in RecentDocuments)
+                {
+                    <li>
+                        <div>
+                            <b>@item.Title</b>
+                            <div class="tiny">@item.DocumentCode • @item.OwnerName</div>
+                        </div>
+                        <StatusBadge Status="@item.Status" />
+                    </li>
+                }
+            }
+        </ul>
+    </section>
+    <section class="card">
+        <h2 style="margin-bottom: 12px;">Pending Workflow</h2>
+        <ul class="simple-list">
+            @if (PendingItems.Count == 0)
+            {
+                <li>Không có task chờ duyệt.</li>
+            }
+            else
+            {
+                @foreach (var item in PendingItems)
+                {
+                    <li>
+                        <div>
+                            <b>@item.DocumentTitle</b>
+                            <div class="tiny">@item.DocumentCode • Step @item.StepOrder/@item.TotalSteps</div>
+                        </div>
+                        <span class="tiny">@item.DaysWaiting ngày</span>
+                    </li>
+                }
+            }
+        </ul>
+    </section>
+</div>
+
+@code {
+    private string Error { get; set; } = string.Empty;
+    private IReadOnlyList<DocumentSummaryDto> RecentDocuments { get; set; } = Array.Empty<DocumentSummaryDto>();
+    private IReadOnlyList<PendingApprovalDto> PendingItems { get; set; } = Array.Empty<PendingApprovalDto>();
+
+    private int TotalDocuments => RecentDocuments.Count;
+    private int DraftCount => RecentDocuments.Count(x => x.Status == "Draft");
+    private int ReviewCount => RecentDocuments.Count(x => x.Status is "UnderReview" or "PendingFinalApproval");
+    private int PendingApprovals => PendingItems.Count;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var (docs, _, docError) = await DocumentApiService.SearchAsync(new SearchDocumentsParams { Page = 1, PageSize = 8 });
+        var (pending, _, pendingError) = await WorkflowApiService.GetPendingAsync(page: 1, pageSize: 8);
+
+        RecentDocuments = docs.OrderByDescending(x => x.UpdatedAt).Take(6).ToArray();
+        PendingItems = pending.Take(6).ToArray();
+        Error = docError ?? pendingError ?? string.Empty;
+    }
+}

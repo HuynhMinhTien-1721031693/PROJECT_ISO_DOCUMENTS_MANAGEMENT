@@ -1,0 +1,58 @@
+@page "/login"
+@inject AuthService AuthService
+@inject NavigationManager NavigationManager
+@inject AuthenticationStateProvider AuthStateProvider
+
+<div class="login-wrap">
+    <div class="card login-card">
+        <h1>ISO DMS Login</h1>
+        <p class="muted">Đăng nhập bằng tài khoản demo để sử dụng hệ thống.</p>
+
+        <div class="field">
+            <label>Email</label>
+            <input @bind="Email" />
+        </div>
+        <div class="field">
+            <label>Password</label>
+            <input type="password" @bind="Password" />
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(Error))
+        {
+            <p class="error-banner">@Error</p>
+        }
+
+        <button class="btn" disabled="@Busy" @onclick="HandleLoginAsync">
+            @(Busy ? "Signing in..." : "Sign in")
+        </button>
+    </div>
+</div>
+
+@code {
+    private string Email { get; set; } = "admin@local";
+    private string Password { get; set; } = "Admin@123";
+    private string Error { get; set; } = string.Empty;
+    private bool Busy { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthStateProvider.GetAuthenticationStateAsync();
+        if (state.User.Identity?.IsAuthenticated == true)
+            NavigationManager.NavigateTo("/");
+    }
+
+    private async Task HandleLoginAsync()
+    {
+        Busy = true;
+        Error = string.Empty;
+        var (ok, error) = await AuthService.LoginAsync(Email, Password);
+        Busy = false;
+        if (!ok)
+        {
+            Error = error;
+            return;
+        }
+
+        NavigationManager.NavigateTo("/", forceLoad: true);
+    }
+}

@@ -1,0 +1,71 @@
+@page "/documents"
+@attribute [Authorize]
+@inject DocumentApiService DocumentApiService
+
+<div class="page-head">
+    <div>
+        <h1>Documents</h1>
+        <p class="muted">Tra cứu, lọc và theo dõi tài liệu ISO.</p>
+    </div>
+</div>
+
+<FilterPanel Model="SearchParams" OnApply="LoadAsync" />
+
+@if (Busy)
+{
+    <p class="tiny">Đang tải dữ liệu...</p>
+}
+else if (!string.IsNullOrWhiteSpace(Error))
+{
+    <p class="error-banner">@Error</p>
+}
+
+<DocumentTable Items="DocumentsData" />
+
+<div class="pager">
+    <button class="btn secondary" disabled="@(SearchParams.Page <= 1)" @onclick="PrevPage">Prev</button>
+    <span>Page @SearchParams.Page / @TotalPages</span>
+    <button class="btn secondary" disabled="@(SearchParams.Page >= TotalPages)" @onclick="NextPage">Next</button>
+</div>
+
+@code {
+    private SearchDocumentsParams SearchParams { get; set; } = new();
+    private IReadOnlyList<DocumentSummaryDto> DocumentsData { get; set; } = Array.Empty<DocumentSummaryDto>();
+    private string Error { get; set; } = string.Empty;
+    private bool Busy { get; set; }
+    private int TotalPages { get; set; } = 1;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        Busy = true;
+        Error = string.Empty;
+        var (items, pagination, error) = await DocumentApiService.SearchAsync(SearchParams);
+        Busy = false;
+        DocumentsData = items;
+        Error = error ?? string.Empty;
+        TotalPages = pagination?.TotalPages is > 0 ? pagination.TotalPages : 1;
+    }
+
+    private async Task PrevPage()
+    {
+        if (SearchParams.Page > 1)
+        {
+            SearchParams.Page--;
+            await LoadAsync();
+        }
+    }
+
+    private async Task NextPage()
+    {
+        if (SearchParams.Page < TotalPages)
+        {
+            SearchParams.Page++;
+            await LoadAsync();
+        }
+    }
+}

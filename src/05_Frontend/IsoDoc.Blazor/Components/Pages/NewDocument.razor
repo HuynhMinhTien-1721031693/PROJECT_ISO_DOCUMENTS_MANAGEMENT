@@ -1,0 +1,82 @@
+@page "/new-document"
+@attribute [Authorize]
+@inject DocumentApiService DocumentApiService
+
+<h1>Upload New Document</h1>
+<p class="muted">Hỗ trợ PDF/DOCX/XLSX, dung lượng tối đa 50MB.</p>
+
+<UploadForm Model="Model" Busy="Busy" Error="Error" FileChanged="OnFileChanged" OnSubmit="HandleSubmitAsync" />
+
+@if (!string.IsNullOrWhiteSpace(Success))
+{
+    <p style="margin-top: 10px; color: #166534;">@Success</p>
+}
+
+@code {
+    private readonly UploadFormModel Model = new();
+    private IBrowserFile? _selectedFile;
+    private bool Busy { get; set; }
+    private string Error { get; set; } = string.Empty;
+    private string Success { get; set; } = string.Empty;
+
+    private Task OnFileChanged(IBrowserFile? file)
+    {
+        _selectedFile = file;
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleSubmitAsync()
+    {
+        Error = string.Empty;
+        Success = string.Empty;
+
+        if (_selectedFile is null)
+        {
+            Error = "Vui lòng chọn file upload.";
+            return;
+        }
+
+        var ext = Path.GetExtension(_selectedFile.Name).ToLowerInvariant();
+        var allowedExt = new[] { ".pdf", ".docx", ".xlsx" };
+        if (!allowedExt.Contains(ext))
+        {
+            Error = "Định dạng file không hợp lệ. Chỉ chấp nhận PDF/DOCX/XLSX.";
+            return;
+        }
+
+        if (_selectedFile.Size > 50 * 1024 * 1024)
+        {
+            Error = "File vượt quá 50MB.";
+            return;
+        }
+
+        Busy = true;
+        await using var stream = _selectedFile.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024);
+
+        var tags = Model.TagsRaw
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToArray();
+
+        var (id, error) = await DocumentApiService.UploadAsync(
+            Model.Title,
+            Model.DocumentCode,
+            Model.Standard,
+            Model.Category,
+            Model.Description,
+            Model.ChangeNote,
+            tags,
+            stream,
+            _selectedFile.Name,
+            _selectedFile.ContentType,
+            CancellationToken.None);
+
+        Busy = false;
+        if (!string.IsNullOrWhiteSpace(error))
+        {
+            Error = error;
+            return;
+        }
+
+        Success = $"Upload thành công. Document ID: {id}";
+    }
+}

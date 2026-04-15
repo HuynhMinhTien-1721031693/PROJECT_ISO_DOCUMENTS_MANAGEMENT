@@ -1,0 +1,25 @@
+@inject NavigationManager NavigationManager
+@inject AuthService AuthService
+
+<aside class="sidebar">
+    <h2>ISO DMS</h2>
+    <p>Document Management</p>
+
+    <nav>
+        <NavLink href="/" Match="NavLinkMatch.All">Dashboard</NavLink>
+        <NavLink href="/documents">Documents</NavLink>
+        <NavLink href="/new-document">New Document</NavLink>
+        <NavLink href="/workflow">Workflow</NavLink>
+        <NavLink href="/settings">Settings</NavLink>
+    </nav>
+
+    <button class="btn-outline" @onclick="LogoutAsync">Logout</button>
+</aside>
+
+@code {
+    private async Task LogoutAsync()
+    {
+        await AuthService.LogoutAsync();
+        NavigationManager.NavigateTo("/login", forceLoad: true);
+    }
+}

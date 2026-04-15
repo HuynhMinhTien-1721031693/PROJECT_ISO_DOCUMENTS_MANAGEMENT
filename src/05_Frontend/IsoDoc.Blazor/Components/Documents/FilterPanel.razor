@@ -1,0 +1,61 @@
+<div class="card filters">
+    <div class="field">
+        <label>Keyword</label>
+        <input placeholder="Title hoặc code" @bind="Model.Keyword" />
+    </div>
+    <div class="field">
+        <label>Status</label>
+        <select @bind="Model.Status">
+            <option value="">All</option>
+            <option>Draft</option>
+            <option>UnderReview</option>
+            <option>PendingFinalApproval</option>
+            <option>Published</option>
+            <option>Rejected</option>
+            <option>Archived</option>
+        </select>
+    </div>
+    <div class="field">
+        <label>ISO Standard</label>
+        <select @bind="Model.Standard">
+            <option value="">All</option>
+            <option>ISO9001</option>
+            <option>ISO45001</option>
+            <option>ISO27001</option>
+        </select>
+    </div>
+    <div class="field">
+        <label>Category</label>
+        <select @bind="Model.Category">
+            <option value="">All</option>
+            <option>Policy</option>
+            <option>Procedure</option>
+            <option>WorkInstruction</option>
+            <option>Form</option>
+            <option>Record</option>
+            <option>Manual</option>
+            <option>Specification</option>
+        </select>
+    </div>
+    <div class="actions">
+        <button class="btn" @onclick="Apply">Apply</button>
+        <button class="btn secondary" @onclick="Reset">Reset</button>
+    </div>
+</div>
+
+@code {
+    [Parameter] public SearchDocumentsParams Model { get; set; } = new();
+    [Parameter] public EventCallback OnApply { get; set; }
+
+    private async Task Apply() => await OnApply.InvokeAsync();
+
+    private async Task Reset()
+    {
+        Model.Keyword = null;
+        Model.Status = null;
+        Model.Category = null;
+        Model.Standard = null;
+        Model.Page = 1;
+        await OnApply.InvokeAsync();
+    }
+}
