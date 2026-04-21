@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Text;
 using System.Threading.RateLimiting;
 using IsoDoc.Infrastructure.Identity;
@@ -129,21 +130,61 @@ public static class WebApiServiceExtensions
         services.AddRateLimiter(options =>
         {
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-            options.AddPolicy("login", httpContext =>
+
+            // ASP.NET Core built-in partitioning: login stricter per IP; API per user (JWT) or IP.
+            options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
             {
+                var path = httpContext.Request.Path.Value ?? string.Empty;
+
+                if (httpContext.Request.Path.StartsWithSegments("/health"))
+                    return RateLimitPartition.GetNoLimiter("health");
+
+                if (path.Contains("/swagger", StringComparison.OrdinalIgnoreCase)
+                    || path.Contains("/openapi", StringComparison.OrdinalIgnoreCase))
+                    return RateLimitPartition.GetNoLimiter("swagger");
+
+                if (httpContext.Request.Path.StartsWithSegments("/hubs"))
+                    return RateLimitPartition.GetNoLimiter("signalr");
+
                 var env = httpContext.RequestServices.GetRequiredService<IHostEnvironment>();
-                var permitLimit = string.Equals(
-                        env.EnvironmentName,
-                        "IntegrationTests",
-                        StringComparison.OrdinalIgnoreCase)
-                    ? 10_000
-                    : configuration.GetValue("RateLimiting:LoginPermitPerMinute", 40);
+                var cfg = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+                var isIntegration = string.Equals(
+                    env.EnvironmentName,
+                    "IntegrationTests",
+                    StringComparison.OrdinalIgnoreCase);
+
+                var loginPermit = isIntegration ? 50_000 : cfg.GetValue("RateLimiting:LoginPermitPerMinute", 40);
+                var apiPermit = isIntegration ? 500_000 : cfg.GetValue("RateLimiting:ApiPermitPerMinute", 400);
+
+                var isLoginPost = HttpMethods.IsPost(httpContext.Request.Method)
+                    && path.Contains("/auth/login", StringComparison.OrdinalIgnoreCase);
+
+                if (isLoginPost)
+                {
+                    var ip = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+                    return RateLimitPartition.GetFixedWindowLimiter(
+                        $"login:{ip}",
+                        _ => new FixedWindowRateLimiterOptions
+                        {
+                            AutoReplenishment = true,
+                            PermitLimit = loginPermit,
+                            Window = TimeSpan.FromMinutes(1),
+                            QueueLimit = 0
+                        });
+                }
+
+                var userKey = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier)
+                    ?? httpContext.User.FindFirstValue("sub");
+                var partition = !string.IsNullOrEmpty(userKey)
+                    ? $"api:user:{userKey}"
+                    : $"api:ip:{httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown"}";
+
                 return RateLimitPartition.GetFixedWindowLimiter(
-                    httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                    partition,
                     _ => new FixedWindowRateLimiterOptions
                     {
                         AutoReplenishment = true,
-                        PermitLimit = permitLimit,
+                        PermitLimit = apiPermit,
                         Window = TimeSpan.FromMinutes(1),
                         QueueLimit = 0
                     });

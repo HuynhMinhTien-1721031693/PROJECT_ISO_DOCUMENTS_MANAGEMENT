@@ -5,9 +5,13 @@ using IsoDoc.Domain.Enums;
 using IsoDoc.Domain.Interfaces;
 using MediatR;
 
-namespace IsoDoc.Application.Documents.Queries.SearchDocuments;
+namespace IsoDoc.Application.Documents.Queries.GetDocuments;
 
-public sealed record SearchDocumentsQuery : IRequest<Result<PagedList<DocumentSummaryDto>>>
+/// <summary>
+/// Paged document list backed by <see cref="IDocumentRepository.SearchDocumentsAsync"/> (SQL / in-memory),
+/// with filtering and sorting — authoritative list for the UI.
+/// </summary>
+public sealed record GetDocumentsQuery : IRequest<Result<PagedList<DocumentSummaryDto>>>
 {
     public string? Keyword { get; init; }
     public IsoStandard? Standard { get; init; }
@@ -22,9 +26,9 @@ public sealed record SearchDocumentsQuery : IRequest<Result<PagedList<DocumentSu
     public bool SortDesc { get; init; } = true;
 }
 
-public sealed class SearchDocumentsQueryValidator : AbstractValidator<SearchDocumentsQuery>
+public sealed class GetDocumentsQueryValidator : AbstractValidator<GetDocumentsQuery>
 {
-    public SearchDocumentsQueryValidator()
+    public GetDocumentsQueryValidator()
     {
         RuleFor(x => x.Page)
             .GreaterThanOrEqualTo(1).WithMessage("Page phải >= 1.");
@@ -46,18 +50,15 @@ public sealed class SearchDocumentsQueryValidator : AbstractValidator<SearchDocu
     }
 }
 
-public sealed class SearchDocumentsQueryHandler
-    : IRequestHandler<SearchDocumentsQuery, Result<PagedList<DocumentSummaryDto>>>
+public sealed class GetDocumentsQueryHandler
+    : IRequestHandler<GetDocumentsQuery, Result<PagedList<DocumentSummaryDto>>>
 {
-    private readonly ISearchService _searchService;
+    private readonly IDocumentRepository _documents;
 
-    public SearchDocumentsQueryHandler(ISearchService searchService)
-    {
-        _searchService = searchService;
-    }
+    public GetDocumentsQueryHandler(IDocumentRepository documents) => _documents = documents;
 
     public async Task<Result<PagedList<DocumentSummaryDto>>> Handle(
-        SearchDocumentsQuery query,
+        GetDocumentsQuery query,
         CancellationToken ct)
     {
         var searchQuery = new SearchQuery(
@@ -73,14 +74,14 @@ public sealed class SearchDocumentsQueryHandler
             SortBy: query.SortBy,
             SortDesc: query.SortDesc);
 
-        var result = await _searchService.SearchAsync(searchQuery, ct);
+        var result = await _documents.SearchDocumentsAsync(searchQuery, ct);
 
         var items = result.Hits
             .Select(DocumentSummaryMapping.FromSearchHit)
             .ToList();
 
         var paged = new PagedList<DocumentSummaryDto>(
-            items, result.TotalCount, query.Page, query.PageSize);
+            items, result.TotalCount, result.Page, result.PageSize);
 
         return Result<PagedList<DocumentSummaryDto>>.Success(paged);
     }

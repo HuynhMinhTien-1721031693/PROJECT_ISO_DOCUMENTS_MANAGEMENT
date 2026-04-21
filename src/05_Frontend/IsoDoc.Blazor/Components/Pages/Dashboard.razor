@@ -83,19 +83,43 @@
     private IReadOnlyList<DocumentSummaryDto> RecentDocuments { get; set; } = Array.Empty<DocumentSummaryDto>();
     private IReadOnlyList<PendingApprovalDto> PendingItems { get; set; } = Array.Empty<PendingApprovalDto>();
 
-    private int TotalDocuments => RecentDocuments.Count;
-    private int DraftCount => RecentDocuments.Count(x => x.Status == "Draft");
-    private int ReviewCount => RecentDocuments.Count(x => x.Status is "UnderReview" or "PendingFinalApproval");
-    private int PendingApprovals => PendingItems.Count;
+    private int TotalDocuments { get; set; }
+    private int DraftCount { get; set; }
+    private int ReviewCount { get; set; }
+    private int PendingApprovals { get; set; }
 
     protected override async Task OnInitializedAsync()
     {
-        var (docs, _, docError) = await DocumentApiService.SearchAsync(new SearchDocumentsParams { Page = 1, PageSize = 8 });
-        var (pending, _, pendingError) = await WorkflowApiService.GetPendingAsync(page: 1, pageSize: 8);
+        var recentParams = new SearchDocumentsParams { Page = 1, PageSize = 12, SortBy = "UpdatedAt", SortDesc = true };
+        var draftParams = new SearchDocumentsParams { Status = "Draft", Page = 1, PageSize = 1 };
+        var underParams = new SearchDocumentsParams { Status = "UnderReview", Page = 1, PageSize = 1 };
+        var pendingFinalParams = new SearchDocumentsParams { Status = "PendingFinalApproval", Page = 1, PageSize = 1 };
+
+        var recentTask = DocumentApiService.SearchAsync(recentParams);
+        var totalTask = DocumentApiService.SearchAsync(new SearchDocumentsParams { Page = 1, PageSize = 1 });
+        var draftTask = DocumentApiService.SearchAsync(draftParams);
+        var underTask = DocumentApiService.SearchAsync(underParams);
+        var pendingFinalTask = DocumentApiService.SearchAsync(pendingFinalParams);
+        var pendingWorkflowTask = WorkflowApiService.GetPendingAsync(page: 1, pageSize: 20);
+
+        await Task.WhenAll(recentTask, totalTask, draftTask, underTask, pendingFinalTask, pendingWorkflowTask);
+
+        var (docs, _, docError) = await recentTask;
+        var (_, totalPagination, totalErr) = await totalTask;
+        var (_, draftPag, _) = await draftTask;
+        var (_, underPag, _) = await underTask;
+        var (_, pendingFinalPag, _) = await pendingFinalTask;
+        var (pending, pendingPag, pendingError) = await pendingWorkflowTask;
 
         RecentDocuments = docs.OrderByDescending(x => x.UpdatedAt).Take(6).ToArray();
         PendingItems = pending.Take(6).ToArray();
-        Error = docError ?? pendingError ?? string.Empty;
+        TotalDocuments = totalPagination?.TotalCount ?? docs.Count;
+        DraftCount = draftPag?.TotalCount ?? 0;
+        ReviewCount = (underPag?.TotalCount ?? 0) + (pendingFinalPag?.TotalCount ?? 0);
+        PendingApprovals = pendingPag?.TotalCount ?? pending.Count;
+
+        var err = docError ?? totalErr ?? pendingError;
+        Error = string.IsNullOrWhiteSpace(err) ? string.Empty : ApiProblemMessageFormatter.Format(err);
     }
 
     private void OpenDocument(Guid id) => NavigationManager.NavigateTo($"/documents/{id}");

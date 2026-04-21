@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420" viewBox="0 0 720 420">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+  </defs>
+  <rect width="720" height="420" fill="url(#bg)"/>
+  <text x="360" y="44" text-anchor="middle" fill="#f8fafc" font-family="Segoe UI,sans-serif" font-size="18" font-weight="600">Workflow ph� duy�t</text>
+  <rect x="80" y="100" width="140" height="56" rx="8" fill="#334155" stroke="#38bdf8"/>
+  <text x="150" y="134" text-anchor="middle" fill="#e2e8f0" font-family="Segoe UI,sans-serif" font-size="12">Draft</text>
+  <path d="M230 128 L290 128" stroke="#64748b" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="300" y="100" width="140" height="56" rx="8" fill="#334155" stroke="#a78bfa"/>
+  <text x="370" y="134" text-anchor="middle" fill="#e2e8f0" font-family="Segoe UI,sans-serif" font-size="11">Under review</text>
+  <path d="M450 128 L510 128" stroke="#64748b" stroke-width="2"/>
+  <rect x="520" y="100" width="140" height="56" rx="8" fill="#334155" stroke="#34d399"/>
+  <text x="590" y="128" text-anchor="middle" fill="#e2e8f0" font-family="Segoe UI,sans-serif" font-size="11">Published</text>
+  <text x="360" y="240" text-anchor="middle" fill="#94a3b8" font-family="Segoe UI,sans-serif" font-size="13">Lu�ng tr�ng th�i (minh h�a)</text>
+  <text x="360" y="390" text-anchor="middle" fill="#64748b" font-family="Segoe UI,sans-serif" font-size="11">Thay b�ng �nh/GIF m�n h�nh th�t: docs/screenshots/demo-ui.gif</text>
+</svg>

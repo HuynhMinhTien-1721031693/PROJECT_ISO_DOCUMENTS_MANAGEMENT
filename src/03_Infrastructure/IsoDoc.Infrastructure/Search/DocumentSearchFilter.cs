@@ -133,6 +133,7 @@ internal static class DocumentSearchFilter
                 d.Category.ToString(),
                 d.Standard.ToString(),
                 d.UpdatedAt,
+                d.CurrentVersion.ToString(),
                 1d,
                 Array.Empty<string>()))
             .ToList();

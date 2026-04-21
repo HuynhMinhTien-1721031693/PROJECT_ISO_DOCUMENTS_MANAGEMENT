@@ -5,7 +5,7 @@ using IsoDoc.Application.Documents.Commands.UpdateDocument;
 using IsoDoc.Application.Documents.Commands.UploadDocument;
 using IsoDoc.Application.Documents.Queries.GetDocumentById;
 using IsoDoc.Application.Documents.Queries.GetDocumentFile;
-using IsoDoc.Application.Documents.Queries.SearchDocuments;
+using IsoDoc.Application.Documents.Queries.GetDocuments;
 using IsoDoc.Domain.Enums;
 using IsoDoc.Domain.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -29,6 +29,7 @@ public sealed class DocumentsController : ApiControllerBase
         [FromQuery] IsoStandard? standard = null,
         [FromQuery] DocumentStatus? status = null,
         [FromQuery] DocumentCategory? category = null,
+        [FromQuery] Guid? ownerId = null,
         [FromQuery] DateTime? fromDate = null,
         [FromQuery] DateTime? toDate = null,
         [FromQuery] int page = 1,
@@ -37,12 +38,13 @@ public sealed class DocumentsController : ApiControllerBase
         [FromQuery] bool sortDesc = true,
         CancellationToken ct = default)
     {
-        var query = new SearchDocumentsQuery
+        var query = new GetDocumentsQuery
         {
             Keyword = keyword,
             Standard = standard,
             Status = status,
             Category = category,
+            OwnerId = ownerId,
             FromDate = fromDate,
             ToDate = toDate,
             Page = page,

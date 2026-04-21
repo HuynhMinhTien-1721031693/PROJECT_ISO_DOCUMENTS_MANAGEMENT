@@ -37,6 +37,32 @@
             <option>Specification</option>
         </select>
     </div>
+    <div class="field">
+        <label>Cập nhật từ</label>
+        <InputDate @bind-Value="Model.FromDate" class="input-date" />
+    </div>
+    <div class="field">
+        <label>Đến</label>
+        <InputDate @bind-Value="Model.ToDate" class="input-date" />
+    </div>
+    <div class="field">
+        <label>Sắp xếp</label>
+        <select @bind="Model.SortBy">
+            <option value="UpdatedAt">Ngày cập nhật</option>
+            <option value="CreatedAt">Ngày tạo</option>
+            <option value="Title">Tiêu đề</option>
+            <option value="DocumentCode">Mã tài liệu</option>
+            <option value="Status">Trạng thái</option>
+        </select>
+    </div>
+    <div class="field">
+        <label>/ trang</label>
+        <select @bind="Model.PageSize">
+            <option value="10">10</option>
+            <option value="20">20</option>
+            <option value="50">50</option>
+        </select>
+    </div>
     <div class="actions">
         <button class="btn" @onclick="Apply">Apply</button>
         <button class="btn secondary" @onclick="Reset">Reset</button>
@@ -47,7 +73,11 @@
     [Parameter] public SearchDocumentsParams Model { get; set; } = new();
     [Parameter] public EventCallback OnApply { get; set; }
 
-    private async Task Apply() => await OnApply.InvokeAsync();
+    private async Task Apply()
+    {
+        Model.Page = 1;
+        await OnApply.InvokeAsync();
+    }
 
     private async Task Reset()
     {
@@ -55,6 +85,12 @@
         Model.Status = null;
         Model.Category = null;
         Model.Standard = null;
+        Model.FromDate = null;
+        Model.ToDate = null;
+        Model.OwnerId = null;
+        Model.SortBy = "UpdatedAt";
+        Model.SortDesc = true;
+        Model.PageSize = 20;
         Model.Page = 1;
         await OnApply.InvokeAsync();
     }

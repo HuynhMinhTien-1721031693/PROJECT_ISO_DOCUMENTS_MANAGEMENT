@@ -10,12 +10,12 @@
         <p class="muted">Đăng nhập bằng tài khoản demo để sử dụng hệ thống.</p>
 
         <div class="field">
-            <label>Email</label>
-            <input @bind="Email" />
+            <label for="login-email">Email</label>
+            <input id="login-email" type="email" autocomplete="username" @bind="Email" />
         </div>
         <div class="field">
-            <label>Password</label>
-            <input type="password" @bind="Password" />
+            <label for="login-password">Password</label>
+            <input id="login-password" type="password" autocomplete="current-password" @bind="Password" />
         </div>
 
         @if (!string.IsNullOrWhiteSpace(Error))

@@ -1,12 +1,12 @@
 # Triển khai Docker (demo cuối kỳ)
 
-Stack gồm **SQL Server 2022**, **Elasticsearch 8**, **Web API**, **Blazor Server**. Phù hợp chạy demo trên máy cá nhân có Docker Desktop (Windows/macOS) hoặc Docker Engine (Linux).
+Stack gồm **SQL Server 2022**, **Redis 7** (cache), **Elasticsearch 8**, **Web API**, **Blazor Server**. Phù hợp chạy demo trên máy cá nhân có Docker Desktop (Windows/macOS) hoặc Docker Engine (Linux).
 
 ## Yêu cầu
 
 - Docker Engine 24+ và plugin Compose V2  
 - RAM khuyến nghị **tối thiểu 8 GB** (Elasticsearch + SQL Server)  
-- Cổng host trống: **5062** (Blazor), **5075** (API), **9200** (Elasticsearch), **14333** (SQL Server, tuỳ chọn truy cập ngoài)
+- Cổng host trống: **5062** (Blazor), **5075** (API), **9200** (Elasticsearch), **6379** (Redis), **14333** (SQL Server, tuỳ chọn truy cập ngoài)
 
 ## Chạy nhanh
 
@@ -40,6 +40,7 @@ docker compose up
 | Swagger API | http://localhost:5075/swagger |
 | Health API | http://localhost:5075/health |
 | Elasticsearch | http://localhost:9200 |
+| Redis | localhost:6379 |
 
 ## Tài khoản demo (seed trong container)
 

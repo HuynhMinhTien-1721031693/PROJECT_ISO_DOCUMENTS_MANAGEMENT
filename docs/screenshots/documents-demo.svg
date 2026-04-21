@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420" viewBox="0 0 720 420">
+  <rect width="720" height="420" fill="#eff1f5"/>
+  <rect x="0" y="0" width="200" height="420" fill="#dce0e8"/>
+  <text x="24" y="48" fill="#4c4f69" font-family="Segoe UI,sans-serif" font-size="14" font-weight="600">Menu</text>
+  <text x="24" y="88" fill="#5c5f77" font-family="Segoe UI,sans-serif" font-size="12">T�i li�u</text>
+  <text x="24" y="118" fill="#5c5f77" font-family="Segoe UI,sans-serif" font-size="12">Workflow</text>
+  <rect x="220" y="24" width="476" height="372" rx="8" fill="#ffffff" stroke="#ccd0da"/>
+  <text x="240" y="56" fill="#4c4f69" font-family="Segoe UI,sans-serif" font-size="18" font-weight="600">Danh s�ch t�i li�u</text>
+  <rect x="240" y="80" width="436" height="32" rx="4" fill="#e6e9ef"/>
+  <rect x="240" y="124" width="436" height="28" rx="2" fill="#ccd0da" opacity="0.5"/>
+  <rect x="240" y="160" width="436" height="28" rx="2" fill="#ccd0da" opacity="0.35"/>
+  <rect x="240" y="196" width="436" height="28" rx="2" fill="#ccd0da" opacity="0.2"/>
+  <text x="360" y="400" text-anchor="middle" fill="#8c8fa1" font-family="Segoe UI,sans-serif" font-size="11">Wireframe minh h�a</text>
+</svg>

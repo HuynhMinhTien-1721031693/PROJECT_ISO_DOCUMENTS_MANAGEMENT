@@ -40,11 +40,9 @@ public sealed class NotificationSignalRService : IAsyncDisposable
                 .WithAutomaticReconnect()
                 .Build();
 
-            _connection.On<object>("ReceiveNotification", async _ =>
-            {
-                if (NotificationReceived is not null)
-                    await NotificationReceived.Invoke();
-            });
+            // Must match server hub event names (see NotificationHub in API / Infrastructure).
+            _connection.On<object>("ReceiveNotification", OnPushPayload);
+            _connection.On<object>("DocumentApproved", OnPushPayload);
 
             await _connection.StartAsync(ct);
         }
@@ -66,5 +64,11 @@ public sealed class NotificationSignalRService : IAsyncDisposable
         if (_connection is not null)
             await _connection.DisposeAsync();
         _gate.Dispose();
+    }
+
+    private async Task OnPushPayload(object _)
+    {
+        if (NotificationReceived is not null)
+            await NotificationReceived.Invoke();
     }
 }

@@ -37,6 +37,12 @@ public sealed class DocumentApiService
             query.Add($"category={Uri.EscapeDataString(request.Category)}");
         if (!string.IsNullOrWhiteSpace(request.Standard))
             query.Add($"standard={Uri.EscapeDataString(request.Standard)}");
+        if (request.OwnerId is { } owner && owner != Guid.Empty)
+            query.Add($"ownerId={owner}");
+        if (request.FromDate is { } from)
+            query.Add($"fromDate={Uri.EscapeDataString(from.ToString("yyyy-MM-dd"))}");
+        if (request.ToDate is { } to)
+            query.Add($"toDate={Uri.EscapeDataString(to.ToString("yyyy-MM-dd"))}");
 
         var (data, pagination, error) = await _apiClient.GetWrappedAsync<IReadOnlyList<DocumentSummaryDto>>(
             $"Documents?{string.Join("&", query)}",

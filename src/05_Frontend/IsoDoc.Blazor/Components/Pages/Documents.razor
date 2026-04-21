@@ -2,12 +2,17 @@
 @attribute [Authorize]
 @inject DocumentApiService DocumentApiService
 
-<div class="page-head">
+<div class="page-head" style="display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;">
     <div>
-        <h1>Documents</h1>
-        <p class="muted">Tra cứu, lọc và theo dõi tài liệu ISO.</p>
+        <h1>Tài liệu</h1>
+        <p class="muted">Danh sách phân trang, lọc theo trạng thái / ISO / ngày cập nhật (truy vấn DB qua API).</p>
     </div>
+    <a class="btn" href="/new-document">Tải lên mới</a>
 </div>
+@if (!Busy && string.IsNullOrWhiteSpace(Error))
+{
+    <p class="tiny" style="margin-bottom:8px;">Tổng <strong>@TotalCount</strong> bản ghi — trang @SearchParams.Page / @TotalPages (@SearchParams.PageSize / trang)</p>
+}
 
 <FilterPanel Model="SearchParams" OnApply="LoadAsync" />
 
@@ -34,6 +39,7 @@ else if (!string.IsNullOrWhiteSpace(Error))
     private string Error { get; set; } = string.Empty;
     private bool Busy { get; set; }
     private int TotalPages { get; set; } = 1;
+    private int TotalCount { get; set; }
 
     protected override async Task OnInitializedAsync()
     {
@@ -49,6 +55,7 @@ else if (!string.IsNullOrWhiteSpace(Error))
         DocumentsData = items;
         Error = string.IsNullOrWhiteSpace(error) ? string.Empty : ApiProblemMessageFormatter.Format(error);
         TotalPages = pagination?.TotalPages is > 0 ? pagination.TotalPages : 1;
+        TotalCount = pagination?.TotalCount ?? items.Count;
     }
 
     private async Task PrevPage()

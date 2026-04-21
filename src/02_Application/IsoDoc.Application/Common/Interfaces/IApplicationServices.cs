@@ -21,7 +21,13 @@ public interface IPermissionService
 public interface INotificationSender
 {
     Task SendEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken ct = default);
-    Task SendInAppNotificationAsync(Guid userId, string title, string message, string? actionUrl = null, CancellationToken ct = default);
+    Task SendInAppNotificationAsync(
+        Guid userId,
+        string title,
+        string message,
+        string? actionUrl = null,
+        CancellationToken ct = default,
+        bool broadcastDocumentApprovedRealtime = false);
 }
 
 /// <summary>Resolves user contact info from the configured identity store (intranet / dev auth users).</summary>

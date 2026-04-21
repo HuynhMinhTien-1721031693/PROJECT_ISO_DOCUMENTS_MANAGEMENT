@@ -72,7 +72,8 @@ public sealed class DocumentPublishedEventHandler : INotificationHandler<Documen
                 title: "Tài liệu đã được phát hành",
                 message: $"Tài liệu {notification.DocumentCode} v{notification.Version} đã được phê duyệt và phát hành.",
                 actionUrl: $"/documents/{notification.DocumentId}",
-                ct: ct);
+                ct: ct,
+                broadcastDocumentApprovedRealtime: true);
         }
         catch (Exception ex)
         {

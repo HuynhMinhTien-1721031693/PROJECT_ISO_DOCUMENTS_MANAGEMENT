@@ -119,6 +119,9 @@ public sealed class SearchDocumentsParams
     public string? Status { get; set; }
     public string? Category { get; set; }
     public string? Standard { get; set; }
+    public Guid? OwnerId { get; set; }
+    public DateTime? FromDate { get; set; }
+    public DateTime? ToDate { get; set; }
     public int Page { get; set; } = 1;
     public int PageSize { get; set; } = 20;
     public string SortBy { get; set; } = "UpdatedAt";

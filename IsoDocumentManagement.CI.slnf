@@ -1,0 +1,15 @@
+{
+  "solution": {
+    "path": "IsoDocumentManagement.sln",
+    "projects": [
+      "src\\01_Domain\\IsoDoc.Domain\\IsoDoc.Domain.csproj",
+      "src\\02_Application\\IsoDoc.Application\\IsoDoc.Application.csproj",
+      "src\\03_Infrastructure\\IsoDoc.Infrastructure\\IsoDoc.Infrastructure.csproj",
+      "src\\04_WebAPI\\IsoDoc.WebAPI\\IsoDoc.WebAPI.csproj",
+      "src\\05_Frontend\\IsoDoc.Blazor\\IsoDoc.Blazor.csproj",
+      "src\\tests\\IsoDoc.Domain.Tests\\IsoDoc.Domain.Tests.csproj",
+      "src\\tests\\IsoDoc.Infrastructure.Tests\\IsoDoc.Infrastructure.Tests.csproj",
+      "src\\tests\\IsoDoc.Integration.Tests\\IsoDoc.Integration.Tests.csproj"
+    ]
+  }
+}

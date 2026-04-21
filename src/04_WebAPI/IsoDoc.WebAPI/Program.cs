@@ -5,6 +5,7 @@ using IsoDoc.WebAPI.Extensions;
 using IsoDoc.WebAPI.Middleware;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Data.SqlClient;
 using Serilog;
 using System.Text.Json;
 
@@ -17,6 +18,7 @@ try
     Log.Information("Starting ISO Document Management System v3...");
 
     var builder = WebApplication.CreateBuilder(args);
+    TryEnableDevelopmentInMemoryFallback(builder);
     #region agent log
     WriteDebugLog(
         "h4",
@@ -151,6 +153,35 @@ finally
 static bool IsSwaggerEnabled(IHostEnvironment env) =>
     env.IsDevelopment()
     || string.Equals(env.EnvironmentName, "Docker", StringComparison.OrdinalIgnoreCase);
+
+static void TryEnableDevelopmentInMemoryFallback(WebApplicationBuilder builder)
+{
+    if (!builder.Environment.IsDevelopment())
+        return;
+
+    var conn = builder.Configuration.GetConnectionString("SqlServer");
+    if (string.IsNullOrWhiteSpace(conn))
+        return;
+
+    if (!conn.Contains("(localdb)", StringComparison.OrdinalIgnoreCase))
+        return;
+
+    try
+    {
+        using var sql = new SqlConnection(conn);
+        sql.Open();
+    }
+    catch (Exception ex)
+    {
+        builder.Configuration["ConnectionStrings:SqlServer"] = string.Empty;
+        builder.Configuration["ConnectionStrings:DefaultConnection"] = string.Empty;
+        WriteDebugLog(
+            "h-localdb-fallback",
+            "IsoDoc.WebAPI/Program.cs:startup:localdb-fallback",
+            "LocalDB unavailable in Development, switched to in-memory repositories",
+            new { reason = ex.Message });
+    }
+}
 
 static void WriteDebugLog(string hypothesisId, string location, string message, object data)
 {

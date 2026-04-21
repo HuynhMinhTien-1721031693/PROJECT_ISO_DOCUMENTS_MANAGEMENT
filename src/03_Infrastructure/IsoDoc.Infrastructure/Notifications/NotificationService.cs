@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.RegularExpressions;
 using IsoDoc.Application.Common.Interfaces;
 using IsoDoc.Domain.Entities;
 using IsoDoc.Domain.Interfaces;
@@ -89,7 +90,8 @@ public sealed class NotificationService : INotificationSender
         string title,
         string message,
         string? actionUrl = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool broadcastDocumentApprovedRealtime = false)
     {
         var entity = new UserNotification
         {
@@ -106,19 +108,37 @@ public sealed class NotificationService : INotificationSender
         {
             try
             {
+                var payload = new
+                {
+                    id = entity.Id,
+                    title,
+                    message,
+                    actionUrl,
+                    createdAt = entity.CreatedAt
+                };
+
                 await _hub.Clients
                     .User(userId.ToString())
-                    .SendAsync(
-                        "ReceiveNotification",
-                        new
-                        {
-                            id = entity.Id,
-                            title,
-                            message,
-                            actionUrl,
-                            createdAt = entity.CreatedAt
-                        },
-                        ct);
+                    .SendAsync(NotificationHub.ReceiveNotification, payload, ct);
+
+                if (broadcastDocumentApprovedRealtime)
+                {
+                    Guid? documentId = TryParseDocumentIdFromActionUrl(actionUrl);
+                    await _hub.Clients
+                        .User(userId.ToString())
+                        .SendAsync(
+                            NotificationHub.DocumentApproved,
+                            new
+                            {
+                                notificationId = entity.Id,
+                                documentId,
+                                title,
+                                message,
+                                actionUrl,
+                                createdAt = entity.CreatedAt
+                            },
+                            ct);
+                }
             }
             catch (Exception ex)
             {
@@ -147,5 +167,14 @@ public sealed class NotificationService : INotificationSender
         {
             _logger.LogDebug("No email configured for user {UserId}; in-app notification persisted only.", userId);
         }
+    }
+
+    private static Guid? TryParseDocumentIdFromActionUrl(string? actionUrl)
+    {
+        if (string.IsNullOrWhiteSpace(actionUrl))
+            return null;
+
+        var m = Regex.Match(actionUrl, @"documents/([0-9a-fA-F-]{36})", RegexOptions.IgnoreCase);
+        return m.Success && Guid.TryParse(m.Groups[1].Value, out var id) ? id : null;
     }
 }

@@ -147,6 +147,7 @@ public sealed class ElasticsearchService : ISearchService
                         hit.Source.Category,
                         hit.Source.IsoStandard,
                         hit.Source.UpdatedAt,
+                        hit.Source.CurrentVersion ?? string.Empty,
                         hit.Score ?? 0,
                         Array.Empty<string>());
                 })
@@ -206,6 +207,7 @@ public sealed class ElasticsearchService : ISearchService
         IsoStandard = document.Standard.ToString(),
         Category = document.Category.ToString(),
         Status = document.Status.ToString(),
+        CurrentVersion = document.CurrentVersion.ToString(),
         Tags = document.Tags.ToArray(),
         OwnerId = document.OwnerId.ToString(),
         UpdatedAt = document.UpdatedAt
@@ -221,6 +223,7 @@ public sealed class DocumentIndexModel
     public string IsoStandard { get; set; } = string.Empty;
     public string Category { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+    public string CurrentVersion { get; set; } = string.Empty;
     public string[] Tags { get; set; } = Array.Empty<string>();
     public string OwnerId { get; set; } = string.Empty;
     public DateTime UpdatedAt { get; set; }

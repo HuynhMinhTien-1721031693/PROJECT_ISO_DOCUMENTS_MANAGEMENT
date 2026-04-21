@@ -3,8 +3,12 @@
 @inject DocumentApiService DocumentApiService
 @inject NavigationManager Navigation
 
-<h1>Upload New Document</h1>
-<p class="muted">Hỗ trợ PDF/DOCX/XLSX, dung lượng tối đa 50MB.</p>
+<div style="margin-bottom:16px;">
+    <a class="btn secondary" href="/documents">← Quay lại danh sách</a>
+</div>
+
+<h1>Tải lên tài liệu mới</h1>
+<p class="muted">Cần quyền Document Controller. Định dạng: PDF, DOCX, XLSX — tối đa 50MB. Mã tài liệu dạng <code>QMS-PR-001</code>.</p>
 
 <UploadForm Model="Model" Busy="Busy" Error="Error" FileChanged="OnFileChanged" OnSubmit="HandleSubmitAsync" />
 

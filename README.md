@@ -8,6 +8,16 @@ Mục tiêu chính:
 - Phân quyền theo vai trò (RBAC).
 - Tìm kiếm full-text.
 
+## Giao diện (demo)
+
+Các ảnh dưới đây là **wireframe SVG** minh họa bố cục Blazor; bạn có thể thay bằng ảnh chụp màn hình PNG hoặc **GIF** quay nhanh luồng đăng nhập → tài liệu → workflow (đặt tại `docs/screenshots/`, ví dụ `demo-ui.gif`).
+
+| Đăng nhập | Danh sách tài liệu | Workflow |
+|-------------|-------------------|----------|
+| ![Đăng nhập](docs/screenshots/login-demo.svg) | ![Tài liệu](docs/screenshots/documents-demo.svg) | ![Workflow](docs/screenshots/workflow-demo.svg) |
+
+**Gợi ý tạo GIF:** Windows (Xbox Game Bar `Win+Alt+R`), ShareX, hoặc OBS — xuất file `docs/screenshots/demo-ui.gif` rồi thêm một dòng markdown `![Demo](docs/screenshots/demo-ui.gif)` vào bảng hoặc đoạn dưới đây.
+
 ## Kiến trúc ngắn gọn
 
 Project chia 4 tầng:
@@ -49,12 +59,20 @@ Hướng dẫn sử dụng tổng quát (Docker + local): **`HUONG_DAN_SU_DUNG.m
 Tham khảo template:
 - `src/03_Infrastructure/IsoDoc.Infrastructure/appsettings.template.json`
 
-Điền các section quan trọng trong `src/04_WebAPI/IsoDoc.WebAPI/appsettings.json`:
-- `ConnectionStrings:DefaultConnection`
+**Development (local):** file `appsettings.Development.json` **không được commit** (tránh lộ connection string / mật khẩu dev). Hãy sao chép mẫu an toàn:
+
+```bash
+copy src\04_WebAPI\IsoDoc.WebAPI\appsettings.Development.json.example src\04_WebAPI\IsoDoc.WebAPI\appsettings.Development.json
+```
+
+Sau đó chỉnh `YOUR_DATABASE_NAME`, `YOUR_DEV_PASSWORD`, v.v. trong file vừa tạo.
+
+Điền các section quan trọng trong `src/04_WebAPI/IsoDoc.WebAPI/appsettings.json` (môi trường chung):
+- `ConnectionStrings:SqlServer` (nếu không chỉ trong Development)
 - `ConnectionStrings:Redis`
-- `BlobStorage`
-- `Elasticsearch`
-- `Jwt`
+- `BlobStorage` / `IsoDoc:AzureBlob`
+- `IsoDoc:Elasticsearch`
+- `IsoDoc:Jwt`
 - `Notifications`
 
 ### 3) Build và run
@@ -89,6 +107,17 @@ Controller chỉ nhận request và `Mediator.Send(...)` sang Application layer,
 - `Models/ApiResponse.cs`
 - `Controllers/DocumentsController.cs`
 - `Controllers/OtherControllers.cs` (Workflow, Search, Auth)
+
+## Kiểm thử
+
+```bash
+dotnet test src/tests/IsoDoc.Domain.Tests/IsoDoc.Domain.Tests.csproj
+dotnet test src/tests/IsoDoc.Infrastructure.Tests/IsoDoc.Infrastructure.Tests.csproj
+dotnet test src/tests/IsoDoc.Integration.Tests/IsoDoc.Integration.Tests.csproj
+npx --prefix e2e playwright test tests/smoke.spec.ts --config e2e/playwright.config.ts
+```
+
+**CI (GitHub Actions):** push/PR lên `main` / `master` / `develop` chạy `dotnet restore/build/test` trên file lọc `IsoDocumentManagement.CI.slnf` (bỏ Maui Android). Xem `.github/workflows/ci.yml`.
 
 ## Ghi chú
 

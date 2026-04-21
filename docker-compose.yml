@@ -1,6 +1,16 @@
-# ISO Documents Management — local demo stack (SQL Server + Elasticsearch + API + Blazor)
+# ISO Documents Management — full demo stack (SQL Server + Redis + Elasticsearch + API + Blazor)
 # Usage: copy .env.example to .env (optional), then: docker compose up --build
 services:
+  isodoc-redis:
+    image: redis:7-alpine
+    container_name: isodoc-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - isodoc-redis-data:/data
+    restart: unless-stopped
+
   isodoc-sql:
     image: mcr.microsoft.com/mssql/server:2022-latest
     container_name: isodoc-sql
@@ -33,14 +43,17 @@ services:
     container_name: isodoc-api
     depends_on:
       - isodoc-sql
+      - isodoc-redis
       - isodoc-es
     ports:
       - "5075:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Docker
       ConnectionStrings__SqlServer: "Server=isodoc-sql,1433;Database=IsoDocDms;User Id=sa;Password=${MSSQL_SA_PASSWORD:-IsoDoc_Demo1!};TrustServerCertificate=True;MultipleActiveResultSets=true"
+      ConnectionStrings__Redis: "isodoc-redis:6379"
       IsoDoc__Elasticsearch__Uri: "http://isodoc-es:9200"
       IsoDoc__Jwt__SigningKey: "${JWT_SIGNING_KEY:-DOCKER_DEMO_JWT_SIGNING_KEY_32_CHARS_MIN!}"
+      Notifications__EnableSignalR: "true"
     volumes:
       - isodoc-blobs:/app/App_Data/blobs
     restart: unless-stopped
@@ -62,4 +75,5 @@ services:
 volumes:
   isodoc-sql-data:
   isodoc-es-data:
+  isodoc-redis-data:
   isodoc-blobs:

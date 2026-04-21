@@ -213,6 +213,7 @@ public record SearchHit(
     string Category,
     string Standard,
     DateTime UpdatedAt,
+    string CurrentVersion,
     double Score,
     IReadOnlyList<string> Highlights);
 

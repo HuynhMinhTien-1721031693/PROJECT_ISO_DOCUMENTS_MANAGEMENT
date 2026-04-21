@@ -45,7 +45,8 @@ public sealed class ConfigFileUserAuthenticationService : IUserAuthenticationSer
         if (user is null)
             return (false, null, null);
 
-        if (!VerifyPassword(password, user.Password, _options))
+        var passwordOk = VerifyPassword(password, user.Password, _options);
+        if (!passwordOk)
         {
             var failed = await _cache.GetAsync<FailedLoginRecord>(failKey, ct) ?? new FailedLoginRecord();
             failed = failed with { Count = failed.Count + 1, LastFailedAtUtc = DateTime.UtcNow };

@@ -20,7 +20,7 @@ Chi tiết biến môi trường, cổng, xóa volume: xem **`DOCKER.md`**.
 
 ### B. Chạy trực tiếp trên máy (.NET SDK 8)
 
-1. Cấu hình `src/04_WebAPI/IsoDoc.WebAPI/appsettings.Development.json` (SQL Server, Elasticsearch nếu có).  
+1. Sao chép `src/04_WebAPI/IsoDoc.WebAPI/appsettings.Development.json.example` thành `appsettings.Development.json`, rồi điền SQL Server, Elasticsearch (nếu có) và tài khoản seed — file `.json` (không phải `.example`) được gitignore để tránh commit connection string.  
 2. Chạy API:
 
 ```bash
