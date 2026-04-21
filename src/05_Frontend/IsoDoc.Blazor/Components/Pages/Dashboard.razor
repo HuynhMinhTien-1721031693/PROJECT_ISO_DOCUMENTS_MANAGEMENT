@@ -2,6 +2,7 @@
 @attribute [Authorize]
 @inject DocumentApiService DocumentApiService
 @inject WorkflowApiService WorkflowApiService
+@inject NavigationManager NavigationManager
 
 <h1>Dashboard</h1>
 <p class="muted">Tổng quan tài liệu ISO và tiến độ duyệt.</p>
@@ -44,7 +45,7 @@
                 {
                     <li>
                         <div>
-                            <b>@item.Title</b>
+                            <button class="btn-link" @onclick="() => OpenDocument(item.Id)">@item.Title</button>
                             <div class="tiny">@item.DocumentCode • @item.OwnerName</div>
                         </div>
                         <StatusBadge Status="@item.Status" />
@@ -96,4 +97,6 @@
         PendingItems = pending.Take(6).ToArray();
         Error = docError ?? pendingError ?? string.Empty;
     }
+
+    private void OpenDocument(Guid id) => NavigationManager.NavigateTo($"/documents/{id}");
 }

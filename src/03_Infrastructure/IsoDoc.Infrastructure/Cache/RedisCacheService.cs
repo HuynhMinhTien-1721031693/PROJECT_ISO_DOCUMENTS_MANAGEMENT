@@ -2,7 +2,6 @@ using System.Text.Json;
 using IsoDoc.Application.Common.Interfaces;
 using IsoDoc.Infrastructure.Identity;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
 namespace IsoDoc.Infrastructure.Cache
@@ -91,52 +90,5 @@ public sealed class RedisCacheService : ICacheService, IRedisCacheService
             _logger.LogWarning(ex, "Redis DELETE by prefix failed for {Prefix}", keyPrefix);
         }
     }
-}
-}
-
-namespace IsoDoc.Infrastructure.Notifications
-{
-public sealed class NotificationService : INotificationSender
-{
-    private readonly NotificationOptions _options;
-    private readonly ILogger<NotificationService> _logger;
-
-    public NotificationService(
-        IOptions<NotificationOptions> options,
-        ILogger<NotificationService> logger)
-    {
-        _options = options.Value;
-        _logger = logger;
-    }
-
-    public Task SendEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken ct = default)
-    {
-        _logger.LogInformation(
-            "Sending email to {ToEmail} with subject {Subject} via host {Host}",
-            toEmail, subject, _options.SmtpHost);
-        return Task.CompletedTask;
-    }
-
-    public Task SendInAppNotificationAsync(
-        Guid userId,
-        string title,
-        string message,
-        string? actionUrl = null,
-        CancellationToken ct = default)
-    {
-        _logger.LogInformation("In-app notification to {UserId}: {Title}", userId, title);
-        return Task.CompletedTask;
-    }
-}
-
-public sealed class NotificationOptions
-{
-    public const string Section = "Notifications";
-    public string SmtpHost { get; set; } = "localhost";
-    public int SmtpPort { get; set; } = 587;
-    public string SmtpUser { get; set; } = string.Empty;
-    public string SmtpPass { get; set; } = string.Empty;
-    public string FromAddress { get; set; } = "noreply@isodms.internal";
-    public string FromName { get; set; } = "ISO Document System";
 }
 }

@@ -27,6 +27,12 @@ public sealed class DocumentEntityConfiguration : IEntityTypeConfiguration<Docum
 
         builder.HasIndex(d => d.Code).IsUnique();
 
+        builder.HasIndex(d => new { d.IsDeleted, d.UpdatedAt });
+        builder.HasIndex(d => new { d.Status, d.UpdatedAt });
+        builder.HasIndex(d => d.OwnerId);
+
+        builder.Ignore(d => d.Versions);
+
         builder.Property(d => d.CurrentVersion)
             .HasMaxLength(20)
             .IsRequired()
@@ -100,12 +106,17 @@ public sealed class ApprovalWorkflowEntityConfiguration : IEntityTypeConfigurati
 
         builder.Property(w => w.Status).HasConversion<int>().IsRequired();
 
+        builder.Ignore(w => w.Steps);
+
         builder.HasMany<ApprovalWorkflow.ApprovalStep>("_steps")
             .WithOne()
             .HasForeignKey(s => s.WorkflowId)
             .OnDelete(DeleteBehavior.Cascade);
 
         builder.Navigation("_steps").UsePropertyAccessMode(PropertyAccessMode.Field);
+
+        builder.HasIndex(w => w.DocumentId);
+        builder.HasIndex(w => new { w.DocumentId, w.Status });
     }
 }
 
@@ -136,5 +147,21 @@ public sealed class AuditLogEntityConfiguration : IEntityTypeConfiguration<Audit
         builder.Property(a => a.IpAddress).HasMaxLength(45);
         builder.Property(a => a.UserAgent).HasMaxLength(500);
         builder.HasIndex(a => a.OccurredAt);
+        builder.HasIndex(a => a.UserId);
+        builder.HasIndex(a => new { a.EntityType, a.EntityId });
+    }
+}
+
+public sealed class UserNotificationEntityConfiguration : IEntityTypeConfiguration<UserNotification>
+{
+    public void Configure(EntityTypeBuilder<UserNotification> builder)
+    {
+        builder.ToTable("UserNotifications");
+        builder.HasKey(n => n.Id);
+        builder.Property(n => n.Title).HasMaxLength(500).IsRequired();
+        builder.Property(n => n.Message).HasColumnType("nvarchar(max)").IsRequired();
+        builder.Property(n => n.ActionUrl).HasMaxLength(2000);
+        builder.HasIndex(n => new { n.UserId, n.IsRead });
+        builder.HasIndex(n => n.CreatedAt);
     }
 }

@@ -1,7 +1,10 @@
 using IsoDoc.Application;
 using IsoDoc.Infrastructure;
+using IsoDoc.Infrastructure.Notifications;
 using IsoDoc.WebAPI.Extensions;
+using IsoDoc.WebAPI.Middleware;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Hosting;
 using Serilog;
 using System.Text.Json;
 
@@ -63,6 +66,7 @@ try
     #endregion
 
     app.UseExceptionHandling();
+    app.UseMiddleware<SecurityHeadersMiddleware>();
 
     app.UseSerilogRequestLogging(opts =>
     {
@@ -70,7 +74,7 @@ try
             "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000}ms";
     });
 
-    if (app.Environment.IsDevelopment())
+    if (IsSwaggerEnabled(app.Environment))
     {
         app.UseSwagger();
         app.UseSwaggerUI(c =>
@@ -81,15 +85,26 @@ try
         });
     }
 
-    app.UseHttpsRedirection();
+    if (app.Environment.IsProduction())
+        app.UseHsts();
+
+    if (!string.Equals(
+            app.Environment.EnvironmentName,
+            "IntegrationTests",
+            StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(app.Environment.EnvironmentName, "Docker", StringComparison.OrdinalIgnoreCase))
+        app.UseHttpsRedirection();
+
     app.UseCors("DefaultCors");
     app.UseAuthentication();
     app.UseAuthorization();
+    app.UseRateLimiter();
 
     app.MapControllers();
+    app.MapHub<NotificationHub>("/hubs/notifications");
     app.MapHealthChecks("/health");
 
-    if (app.Environment.IsDevelopment())
+    if (IsSwaggerEnabled(app.Environment))
     {
         #region agent log
         WriteDebugLog(
@@ -132,6 +147,10 @@ finally
 {
     Log.CloseAndFlush();
 }
+
+static bool IsSwaggerEnabled(IHostEnvironment env) =>
+    env.IsDevelopment()
+    || string.Equals(env.EnvironmentName, "Docker", StringComparison.OrdinalIgnoreCase);
 
 static void WriteDebugLog(string hypothesisId, string location, string message, object data)
 {

@@ -42,13 +42,13 @@ public sealed class DocumentApiService
             $"Documents?{string.Join("&", query)}",
             ct);
 
-        return (data ?? Array.Empty<DocumentSummaryDto>(), pagination, error);
+        return (data ?? Array.Empty<DocumentSummaryDto>(), pagination, FormatError(error));
     }
 
     public async Task<(DocumentDto? Document, string? Error)> GetByIdAsync(Guid id, CancellationToken ct = default)
     {
         var (data, _, error) = await _apiClient.GetWrappedAsync<DocumentDto>($"Documents/{id}", ct);
-        return (data, error);
+        return (data, FormatError(error));
     }
 
     public async Task<(Guid? Id, string? Error)> UploadAsync(
@@ -89,9 +89,85 @@ public sealed class DocumentApiService
 
         var response = await _httpClient.SendAsync(request, ct);
         if (!response.IsSuccessStatusCode)
-            return (null, await response.Content.ReadAsStringAsync(ct));
+            return (null, ApiProblemMessageFormatter.Format(await response.Content.ReadAsStringAsync(ct)));
 
         var wrapped = await response.Content.ReadFromJsonAsync<ApiResponse<Guid>>(cancellationToken: ct);
-        return (wrapped?.Data, wrapped?.Data is null ? "Invalid upload response." : null);
+        return (wrapped?.Data, wrapped?.Data is null ? "Phản hồi upload không hợp lệ." : null);
     }
+
+    public async Task<(DocumentDownloadInfoDto? Info, string? Error)> GetDownloadInfoAsync(
+        Guid documentId,
+        Guid? versionId = null,
+        CancellationToken ct = default)
+    {
+        var qs = versionId is null || versionId == Guid.Empty ? "" : $"?versionId={versionId}";
+        var (data, _, error) = await _apiClient.GetWrappedAsync<DocumentDownloadInfoDto>($"Documents/{documentId}/download{qs}", ct);
+        return (data, FormatError(error));
+    }
+
+    public async Task<(Guid? VersionId, string? Error)> AddVersionAsync(
+        Guid documentId,
+        Stream fileStream,
+        string fileName,
+        string contentType,
+        string? changeNote,
+        CancellationToken ct = default)
+    {
+        using var formData = new MultipartFormDataContent();
+        if (!string.IsNullOrWhiteSpace(changeNote))
+            formData.Add(new StringContent(changeNote), "changeNote");
+
+        var fileContent = new StreamContent(fileStream);
+        fileContent.Headers.ContentType = new MediaTypeHeaderValue(contentType);
+        formData.Add(fileContent, "file", fileName);
+
+        var token = (await _tokenStorage.GetTokensAsync())?.AccessToken;
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"Documents/{documentId}/versions") { Content = formData };
+        if (!string.IsNullOrWhiteSpace(token))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var response = await _httpClient.SendAsync(request, ct);
+        if (!response.IsSuccessStatusCode)
+            return (null, ApiProblemMessageFormatter.Format(await response.Content.ReadAsStringAsync(ct)));
+
+        var wrapped = await response.Content.ReadFromJsonAsync<ApiResponse<DocumentVersionCreatedDto>>(cancellationToken: ct);
+        return (wrapped?.Data?.VersionId, wrapped?.Data?.VersionId is null ? "Phản hồi tạo phiên bản không hợp lệ." : null);
+    }
+
+    public async Task<(bool Ok, string? Error)> UpdateMetadataAsync(
+        Guid documentId,
+        string? title,
+        string? description,
+        IReadOnlyList<string>? tags,
+        CancellationToken ct = default)
+    {
+        var (ok, err) = await _apiClient.PutJsonAsync(
+            $"Documents/{documentId}",
+            new { title, description, tags },
+            ct);
+
+        return (ok, FormatError(err));
+    }
+
+    public async Task<(bool Ok, string? Error)> DeleteAsync(Guid documentId, CancellationToken ct = default)
+    {
+        var (ok, err) = await _apiClient.DeleteAsync($"Documents/{documentId}", ct);
+        return (ok, FormatError(err));
+    }
+
+    public async Task<(Guid? WorkflowId, string? Error)> SubmitForApprovalAsync(Guid documentId, CancellationToken ct = default)
+    {
+        var (data, error) = await _apiClient.PostWrappedEmptyAsync<SubmitWorkflowResponseDto>($"Documents/{documentId}/submit", ct);
+        return (data?.WorkflowId, FormatError(error));
+    }
+
+    public string GetAuthorizedFileUrl(Guid documentId, Guid? versionId = null)
+    {
+        var qs = versionId is null || versionId == Guid.Empty ? "" : $"?versionId={versionId}";
+        var root = _httpClient.BaseAddress!.ToString().TrimEnd('/');
+        return $"{root}/Documents/{documentId}/file{qs}";
+    }
+
+    private static string? FormatError(string? raw) =>
+        string.IsNullOrWhiteSpace(raw) ? null : ApiProblemMessageFormatter.Format(raw);
 }

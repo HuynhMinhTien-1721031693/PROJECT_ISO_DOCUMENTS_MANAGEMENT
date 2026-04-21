@@ -38,18 +38,15 @@ public sealed class DocumentCreatedEventHandler : INotificationHandler<DocumentC
 
 public sealed class DocumentPublishedEventHandler : INotificationHandler<DocumentPublishedEvent>
 {
-    private readonly ISearchService _search;
     private readonly IDocumentRepository _documents;
     private readonly INotificationSender _notifications;
     private readonly ILogger<DocumentPublishedEventHandler> _logger;
 
     public DocumentPublishedEventHandler(
-        ISearchService search,
         IDocumentRepository documents,
         INotificationSender notifications,
         ILogger<DocumentPublishedEventHandler> logger)
     {
-        _search = search;
         _documents = documents;
         _notifications = notifications;
         _logger = logger;
@@ -64,16 +61,14 @@ public sealed class DocumentPublishedEventHandler : INotificationHandler<Documen
         var document = await _documents.GetByIdAsync(notification.DocumentId, ct);
         if (document is null)
         {
-            _logger.LogWarning("Document {Id} not found for indexing.", notification.DocumentId);
+            _logger.LogWarning("Document {Id} not found for publish notification.", notification.DocumentId);
             return;
         }
-
-        await _search.UpdateDocumentIndexAsync(document, ct);
 
         try
         {
             await _notifications.SendInAppNotificationAsync(
-                userId: notification.ApprovedBy,
+                userId: document.OwnerId,
                 title: "Tài liệu đã được phát hành",
                 message: $"Tài liệu {notification.DocumentCode} v{notification.Version} đã được phê duyệt và phát hành.",
                 actionUrl: $"/documents/{notification.DocumentId}",
@@ -147,7 +142,7 @@ public sealed class WorkflowStepAdvancedEventHandler : INotificationHandler<Work
             userId: notification.NextApproverId,
             title: $"Cần phê duyệt: {document.Code.Value}",
             message: $"Tài liệu '{document.Title}' đang chờ phê duyệt bước {notification.NextStepOrder} của bạn.",
-            actionUrl: $"/approvals/{notification.DocumentId}",
+            actionUrl: $"/workflow/{notification.WorkflowId}",
             ct: ct);
 
         _logger.LogInformation(

@@ -1,13 +1,14 @@
 using IsoDoc.Application.Common.Interfaces;
 using IsoDoc.Application.Documents.Commands.RecordDecision;
 using IsoDoc.Application.Documents.Queries.GetPendingApprovals;
+using IsoDoc.Application.Documents.Queries.GetWorkflowById;
 using IsoDoc.Application.Documents.Queries.SearchDocuments;
 using IsoDoc.Domain.Enums;
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace IsoDoc.WebAPI.Controllers;
 
@@ -20,6 +21,14 @@ public sealed class WorkflowController : ApiControllerBase
     public WorkflowController(ICurrentUserService currentUser)
     {
         _currentUser = currentUser;
+    }
+
+    [HttpGet("{workflowId:guid}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetById(Guid workflowId, CancellationToken ct = default)
+    {
+        var result = await Mediator.Send(new GetWorkflowByIdQuery(workflowId), ct);
+        return result.IsSuccess ? OkResult(result.Value!) : FromResult(result);
     }
 
     [HttpGet("pending")]
@@ -96,109 +105,70 @@ public sealed class AuthController : ApiControllerBase
 {
     private readonly IJwtTokenService _jwt;
     private readonly ICacheService _cache;
-    private readonly IConfiguration _configuration;
+    private readonly IUserAuthenticationService _userAuth;
 
-    public AuthController(IJwtTokenService jwt, ICacheService cache, IConfiguration configuration)
+    public AuthController(IJwtTokenService jwt, ICacheService cache, IUserAuthenticationService userAuth)
     {
         _jwt = jwt;
         _cache = cache;
-        _configuration = configuration;
+        _userAuth = userAuth;
     }
 
     [HttpPost("login")]
     [AllowAnonymous]
+    [EnableRateLimiting("login")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct = default)
     {
-        if (request is null)
-            request = await TryReadLoginRequestFromBodyAsync(ct) ?? new LoginRequest();
+        if (request is null || (string.IsNullOrWhiteSpace(request.Email) && string.IsNullOrWhiteSpace(request.Password)))
+        {
+            var parsed = await TryReadLoginRequestFromBodyAsync(ct);
+            if (parsed is not null)
+                request = parsed;
+        }
+        request ??= new LoginRequest();
 
-        #region agent log
-        WriteDebugLog(
-            "h17",
-            "IsoDoc.WebAPI/Controllers/OtherControllers.cs:AuthController:Login:entry",
-            "Login request payload received",
-            new
-            {
-                hasRequest = request is not null,
-                emailIsEmpty = string.IsNullOrWhiteSpace(request?.Email),
-                passwordIsEmpty = string.IsNullOrWhiteSpace(request?.Password)
-            });
-        #endregion
         if (request is null || string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
         {
-            #region agent log
-            WriteDebugLog(
-                "h17",
-                "IsoDoc.WebAPI/Controllers/OtherControllers.cs:AuthController:Login:invalid-payload",
-                "Login payload invalid",
-                new
-                {
-                    hasRequest = request is not null,
-                    emailIsEmpty = string.IsNullOrWhiteSpace(request?.Email),
-                    passwordIsEmpty = string.IsNullOrWhiteSpace(request?.Password)
-                });
-            #endregion
             return Problem(
                 detail: "Email va mat khau la bat buoc.",
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
-        var options = _configuration.GetSection(AuthOptions.Section).Get<AuthOptions>() ?? new AuthOptions();
-        var emailKey = request.Email.Trim().ToLowerInvariant();
-        var lockoutKey = LockoutCacheKey(emailKey);
-        var failKey = FailedLoginCacheKey(emailKey);
+        var (success, user, lockedUntilUtc) =
+            await _userAuth.ValidateCredentialsAsync(request.Email, request.Password, ct);
 
-        var lockout = await _cache.GetAsync<LoginLockoutRecord>(lockoutKey, ct);
-        if (lockout is not null && lockout.LockedUntilUtc > DateTime.UtcNow)
+        if (!success)
         {
-            return StatusCode(StatusCodes.Status423Locked, new
+            if (lockedUntilUtc.HasValue && lockedUntilUtc.Value > DateTime.UtcNow)
             {
-                message = "Tai khoan tam thoi bi khoa do dang nhap sai nhieu lan.",
-                lockedUntilUtc = lockout.LockedUntilUtc
-            });
-        }
-
-        var user = ResolveUser(request.Email);
-        if (user is null)
-        {
-            #region agent log
-            WriteDebugLog(
-                "h17",
-                "IsoDoc.WebAPI/Controllers/OtherControllers.cs:AuthController:Login:user-not-found",
-                "Login rejected because user not found",
-                new { email = request.Email.Trim().ToLowerInvariant() });
-            #endregion
-            return Unauthorized();
-        }
-
-        if (!VerifyPassword(request.Password, user.Password, options))
-        {
-            var failed = await _cache.GetAsync<FailedLoginRecord>(failKey, ct) ?? new FailedLoginRecord();
-            failed = failed with { Count = failed.Count + 1, LastFailedAtUtc = DateTime.UtcNow };
-            await _cache.SetAsync(failKey, failed, TimeSpan.FromMinutes(options.FailedAttemptWindowMinutes), ct);
-
-            if (failed.Count >= options.MaxFailedAttempts)
-            {
-                var lockRecord = new LoginLockoutRecord
+                return StatusCode(StatusCodes.Status423Locked, new
                 {
-                    LockedUntilUtc = DateTime.UtcNow.AddMinutes(options.LockoutMinutes)
-                };
-                await _cache.SetAsync(lockoutKey, lockRecord, TimeSpan.FromMinutes(options.LockoutMinutes), ct);
+                    message = "Tai khoan tam thoi bi khoa do dang nhap sai nhieu lan.",
+                    lockedUntilUtc = lockedUntilUtc.Value
+                });
             }
 
             return Unauthorized();
         }
 
-        await _cache.RemoveAsync(failKey, ct);
-        await _cache.RemoveAsync(lockoutKey, ct);
+        if (user is null)
+            return Unauthorized();
 
-        var accessToken = _jwt.CreateAccessToken(user.UserId, user.Email, user.Roles, TimeSpan.FromHours(1));
+        var accessToken = _jwt.CreateAccessToken(
+            user.UserId,
+            user.Email,
+            user.Roles,
+            TimeSpan.FromHours(1),
+            user.DisplayName,
+            user.DepartmentId);
         var refreshToken = Guid.NewGuid().ToString("N");
         var refreshRecord = new RefreshTokenRecord
         {
             UserId = user.UserId,
             Email = user.Email,
+            DisplayName = user.DisplayName,
+            DepartmentId = user.DepartmentId,
             Roles = user.Roles,
             ExpiresAtUtc = DateTime.UtcNow.AddDays(7)
         };
@@ -246,29 +216,6 @@ public sealed class AuthController : ApiControllerBase
         return null;
     }
 
-    private static void WriteDebugLog(string hypothesisId, string location, string message, object data)
-    {
-        try
-        {
-            const string debugLogPath = @"D:\HuynhMinhTien\CONG NGHE .NET\PROJECT_ISO_DOCUMENTS_MANAGEMENT\debug-b9f138.log";
-            var payload = new
-            {
-                sessionId = "b9f138",
-                runId = "pre-fix-4",
-                hypothesisId,
-                location,
-                message,
-                data,
-                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-            };
-            System.IO.File.AppendAllText(debugLogPath, JsonSerializer.Serialize(payload) + Environment.NewLine);
-        }
-        catch
-        {
-            // Keep auth endpoint resilient during debug logging.
-        }
-    }
-
     [HttpPost("refresh")]
     [AllowAnonymous]
     public async Task<IActionResult> Refresh([FromBody] RefreshRequest request, CancellationToken ct = default)
@@ -277,7 +224,13 @@ public sealed class AuthController : ApiControllerBase
         if (existing is null || existing.ExpiresAtUtc <= DateTime.UtcNow)
             return Unauthorized();
 
-        var newAccessToken = _jwt.CreateAccessToken(existing.UserId, existing.Email, existing.Roles, TimeSpan.FromHours(1));
+        var newAccessToken = _jwt.CreateAccessToken(
+            existing.UserId,
+            existing.Email,
+            existing.Roles,
+            TimeSpan.FromHours(1),
+            existing.DisplayName,
+            existing.DepartmentId);
         var newRefreshToken = Guid.NewGuid().ToString("N");
 
         await _cache.RemoveAsync(RefreshCacheKey(request.RefreshToken), ct);
@@ -305,66 +258,7 @@ public sealed class AuthController : ApiControllerBase
         return NoContent();
     }
 
-    private AuthUser? ResolveUser(string email)
-    {
-        var users = _configuration.GetSection("Auth:Users").Get<List<AuthUser>>() ?? new List<AuthUser>();
-        if (users.Count == 0)
-        {
-            users.Add(new AuthUser
-            {
-                UserId = Guid.Parse("11111111-1111-1111-1111-111111111111"),
-                Email = "admin@local",
-                Password = "Admin@123",
-                Roles = new List<string> { "SystemAdmin", "DocumentController" }
-            });
-        }
-
-        return users.FirstOrDefault(u => u.Email.Equals(email, StringComparison.OrdinalIgnoreCase));
-    }
-
     private static string RefreshCacheKey(string token) => $"auth:refresh:{token}";
-    private static string FailedLoginCacheKey(string email) => $"auth:failed:{email}";
-    private static string LockoutCacheKey(string email) => $"auth:lockout:{email}";
-
-    private static bool VerifyPassword(string providedPassword, string storedPassword, AuthOptions options)
-    {
-        if (string.IsNullOrWhiteSpace(storedPassword))
-            return false;
-
-        if (storedPassword.StartsWith("pbkdf2$", StringComparison.OrdinalIgnoreCase))
-            return VerifyPbkdf2Password(providedPassword, storedPassword);
-
-        return options.AllowPlainTextForDev && string.Equals(providedPassword, storedPassword, StringComparison.Ordinal);
-    }
-
-    private static bool VerifyPbkdf2Password(string providedPassword, string encoded)
-    {
-        // Format: pbkdf2$<iterations>$<saltBase64>$<hashBase64>
-        var parts = encoded.Split('$');
-        if (parts.Length != 4 || !int.TryParse(parts[1], out var iterations))
-            return false;
-
-        byte[] salt;
-        byte[] expectedHash;
-        try
-        {
-            salt = Convert.FromBase64String(parts[2]);
-            expectedHash = Convert.FromBase64String(parts[3]);
-        }
-        catch
-        {
-            return false;
-        }
-
-        var actualHash = Rfc2898DeriveBytes.Pbkdf2(
-            password: providedPassword,
-            salt: salt,
-            iterations: iterations,
-            hashAlgorithm: HashAlgorithmName.SHA256,
-            outputLength: expectedHash.Length);
-
-        return CryptographicOperations.FixedTimeEquals(actualHash, expectedHash);
-    }
 }
 
 public sealed class LoginRequest
@@ -386,39 +280,12 @@ public sealed class RefreshRequest
     public string RefreshToken { get; set; } = string.Empty;
 }
 
-public sealed class AuthUser
-{
-    public Guid UserId { get; set; } = Guid.NewGuid();
-    public string Email { get; set; } = string.Empty;
-    public string Password { get; set; } = string.Empty;
-    public List<string> Roles { get; set; } = new();
-}
-
 public sealed record RefreshTokenRecord
 {
     public Guid UserId { get; init; }
     public string Email { get; init; } = string.Empty;
+    public string? DisplayName { get; init; }
+    public Guid? DepartmentId { get; init; }
     public IReadOnlyList<string> Roles { get; init; } = Array.Empty<string>();
     public DateTime ExpiresAtUtc { get; init; }
-}
-
-public sealed record FailedLoginRecord
-{
-    public int Count { get; init; }
-    public DateTime LastFailedAtUtc { get; init; }
-}
-
-public sealed record LoginLockoutRecord
-{
-    public DateTime LockedUntilUtc { get; init; }
-}
-
-public sealed class AuthOptions
-{
-    public const string Section = "Auth";
-
-    public bool AllowPlainTextForDev { get; set; } = true;
-    public int MaxFailedAttempts { get; set; } = 5;
-    public int FailedAttemptWindowMinutes { get; set; } = 15;
-    public int LockoutMinutes { get; set; } = 15;
 }

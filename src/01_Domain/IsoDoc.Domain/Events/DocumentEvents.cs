@@ -12,6 +12,12 @@ public sealed record DocumentCreatedEvent(
     Guid OwnerId
 ) : DomainEventBase;
 
+/// <summary>
+/// Raised after persisted changes that affect search (metadata, workflow status, archive, etc.).
+/// Handlers update Elasticsearch; SQL remains authoritative.
+/// </summary>
+public sealed record DocumentIndexSyncEvent(Guid DocumentId) : DomainEventBase;
+
 /// <summary>Raised when a document is submitted to the approval workflow.</summary>
 public sealed record DocumentSubmittedForReviewEvent(
     Guid DocumentId,
@@ -20,7 +26,7 @@ public sealed record DocumentSubmittedForReviewEvent(
 
 /// <summary>
 /// Raised when a document is fully approved and published.
-/// Triggers: search index update, notification to all viewers, version archive.
+/// Triggers: in-app notification (search index is updated via <see cref="DocumentIndexSyncEvent"/>).
 /// </summary>
 public sealed record DocumentPublishedEvent(
     Guid DocumentId,
@@ -50,6 +56,7 @@ public sealed record DocumentArchivedEvent(
 /// <summary>Raised when a workflow step is approved and the next approver needs to act.</summary>
 public sealed record WorkflowStepAdvancedEvent(
     Guid DocumentId,
+    Guid WorkflowId,
     Guid NextApproverId,
     int NextStepOrder
 ) : DomainEventBase;

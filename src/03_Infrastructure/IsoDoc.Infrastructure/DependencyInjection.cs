@@ -8,8 +8,11 @@ using IsoDoc.Infrastructure.Identity;
 using IsoDoc.Infrastructure.Notifications;
 using IsoDoc.Infrastructure.Persistence;
 using IsoDoc.Infrastructure.Persistence.Repositories;
+using IsoDoc.Infrastructure.Persistence.Identity;
 using IsoDoc.Infrastructure.Search;
+using IsoDoc.Application.Common.Configuration;
 using IsoDoc.Infrastructure.Storage;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,6 +42,8 @@ public static class DependencyInjection
             });
         #endregion
 
+        services.Configure<AuthOptions>(configuration.GetSection(AuthOptions.Section));
+
         if (!string.IsNullOrWhiteSpace(defaultConnection))
         {
             services.AddDbContext<AppDbContext>(options =>
@@ -49,9 +54,30 @@ public static class DependencyInjection
                     sql.EnableRetryOnFailure(3, TimeSpan.FromSeconds(5), null);
                 }));
 
+            services.AddIdentityCore<ApplicationUser>(options =>
+                {
+                    options.User.RequireUniqueEmail = true;
+                    options.Password.RequiredLength = 8;
+                    options.Password.RequireDigit = true;
+                    options.Password.RequireLowercase = true;
+                    options.Password.RequireUppercase = true;
+                    options.Password.RequireNonAlphanumeric = true;
+                    options.Lockout.AllowedForNewUsers = true;
+                    options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
+                    options.Lockout.MaxFailedAccessAttempts = 5;
+                })
+                .AddRoles<IdentityRole<Guid>>()
+                .AddEntityFrameworkStores<AppDbContext>();
+
+            services.AddScoped<IUserAuthenticationService, IdentityUserAuthenticationService>();
+            services.AddScoped<IUserAdministrationService, UserAdministrationService>();
+
             services.AddScoped<IDocumentRepository, DocumentRepository>();
             services.AddScoped<IApprovalWorkflowRepository, ApprovalWorkflowRepository>();
+            services.AddScoped<IUserNotificationRepository, UserNotificationRepository>();
             services.AddScoped<IAuditService, AuditService>();
+            services.AddScoped<IAuditLogReadRepository, AuditLogReadRepository>();
+            services.AddScoped<IComplianceReportRepository, ComplianceReportingRepository>();
             #region agent log
             WriteDebugLog(
                 "h2",
@@ -62,10 +88,17 @@ public static class DependencyInjection
         }
         else
         {
+            services.AddScoped<IUserAuthenticationService, ConfigFileUserAuthenticationService>();
+            services.AddScoped<IUserAdministrationService, UnsupportedUserAdministrationService>();
+
             // Local fallback so the API can start without a database connection string.
             services.AddSingleton<IDocumentRepository, InMemoryDocumentRepository>();
             services.AddSingleton<IApprovalWorkflowRepository, InMemoryApprovalWorkflowRepository>();
-            services.AddSingleton<IAuditService, NoOpAuditService>();
+            services.AddSingleton<IUserNotificationRepository, InMemoryUserNotificationRepository>();
+            services.AddSingleton<InMemoryAuditLogStore>();
+            services.AddSingleton<IAuditLogReadRepository, InMemoryAuditLogReadRepository>();
+            services.AddScoped<IAuditService, InMemoryBufferedAuditService>();
+            services.AddScoped<IComplianceReportRepository, InMemoryComplianceReportRepository>();
             #region agent log
             WriteDebugLog(
                 "h2",
@@ -76,12 +109,17 @@ public static class DependencyInjection
         }
 
         services.Configure<BlobStorageOptions>(configuration.GetSection(BlobStorageOptions.Section));
-        services.AddSingleton(sp =>
+        var blobOptions = configuration.GetSection(BlobStorageOptions.Section).Get<BlobStorageOptions>() ?? new BlobStorageOptions();
+        var useLocalDisk = blobOptions.UseLocalDisk || string.IsNullOrWhiteSpace(blobOptions.ConnectionString);
+        if (useLocalDisk)
         {
-            var options = configuration.GetSection(BlobStorageOptions.Section).Get<BlobStorageOptions>() ?? new BlobStorageOptions();
-            return new BlobServiceClient(options.ConnectionString);
-        });
-        services.AddScoped<IFileStorageService, Storage.AzureBlobStorageService>();
+            services.AddScoped<IFileStorageService, Storage.LocalDiskBlobStorageService>();
+        }
+        else
+        {
+            services.AddSingleton(_ => new BlobServiceClient(blobOptions.ConnectionString));
+            services.AddScoped<IFileStorageService, Storage.AzureBlobStorageService>();
+        }
 
         services.Configure<ElasticsearchOptions>(configuration.GetSection(ElasticsearchOptions.Section));
         services.AddSingleton(sp =>
@@ -92,7 +130,8 @@ public static class DependencyInjection
                 settings.Authentication(new Elastic.Transport.ApiKey(options.ApiKey));
             return new ElasticsearchClient(settings);
         });
-        services.AddScoped<ISearchService, ElasticsearchService>();
+        services.AddScoped<ElasticsearchService>();
+        services.AddScoped<ISearchService, ResilientSearchService>();
 
         var redisConnection = configuration.GetConnectionString("Redis");
         if (string.IsNullOrWhiteSpace(redisConnection))
@@ -124,6 +163,7 @@ public static class DependencyInjection
         services.AddScoped<ICurrentUserService, CurrentUserService>();
         services.AddScoped<IPermissionService, PermissionService>();
         services.AddScoped<IApproverResolverService, ApproverResolverService>();
+        services.AddSingleton<IUserDirectoryLookup, ConfigAuthUserDirectoryService>();
 
         services.Configure<NotificationOptions>(configuration.GetSection(NotificationOptions.Section));
         services.AddScoped<INotificationSender, NotificationService>();
@@ -149,6 +189,7 @@ public static class DependencyInjection
         if (db is null)
             return;
         await db.Database.MigrateAsync();
+        await IdentityDataSeeder.SeedAsync(services);
     }
 
     private static void WriteDebugLog(string hypothesisId, string location, string message, object data)

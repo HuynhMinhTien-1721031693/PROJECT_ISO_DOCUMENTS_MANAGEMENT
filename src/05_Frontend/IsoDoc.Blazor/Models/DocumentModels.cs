@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace IsoDoc.Blazor.Models;
 
 public sealed class DocumentSummaryDto
@@ -17,12 +19,43 @@ public sealed class DocumentVersionDto
 {
     public Guid Id { get; init; }
     public string BlobPath { get; init; } = string.Empty;
+    public string OriginalFileName { get; init; } = string.Empty;
     public string FileType { get; init; } = string.Empty;
+    public string ContentType { get; init; } = string.Empty;
+    public long FileSize { get; init; }
     public string FileSizeFormatted { get; init; } = string.Empty;
+    public string ChecksumHex { get; init; } = string.Empty;
     public string? ChangeNote { get; init; }
     public string UploadedByName { get; init; } = string.Empty;
     public DateTime UploadedAt { get; init; }
     public bool IsCurrentVersion { get; init; }
+}
+
+public sealed class SubmitWorkflowResponseDto
+{
+    [JsonPropertyName("workflowId")]
+    public Guid WorkflowId { get; init; }
+}
+
+public sealed class DocumentVersionCreatedDto
+{
+    [JsonPropertyName("documentId")]
+    public Guid DocumentId { get; init; }
+
+    [JsonPropertyName("versionId")]
+    public Guid VersionId { get; init; }
+}
+
+public sealed class DocumentDownloadInfoDto
+{
+    public string Mode { get; init; } = string.Empty;
+    public string? SasUrl { get; init; }
+    public DateTimeOffset? SasExpiresAt { get; init; }
+    public string? ApiRelativeUrl { get; init; }
+    public string FileName { get; init; } = string.Empty;
+    public string ContentType { get; init; } = string.Empty;
+    public long FileSize { get; init; }
+    public string ChecksumHex { get; init; } = string.Empty;
 }
 
 public sealed class ApprovalStepDto

@@ -32,4 +32,12 @@ public sealed class WorkflowApiService
             new { decision, comment },
             ct);
     }
+
+    public async Task<(WorkflowDetailDto? Detail, string? Error)> GetDetailAsync(
+        Guid workflowId,
+        CancellationToken ct = default)
+    {
+        var (data, _, error) = await _apiClient.GetWrappedAsync<WorkflowDetailDto>($"Workflow/{workflowId}", ct);
+        return (data, error);
+    }
 }

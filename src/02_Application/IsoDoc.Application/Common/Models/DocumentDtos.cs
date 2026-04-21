@@ -38,13 +38,36 @@ public sealed record DocumentVersionDto
 {
     public Guid Id { get; init; }
     public string BlobPath { get; init; } = string.Empty;
+    public string OriginalFileName { get; init; } = string.Empty;
     public string FileType { get; init; } = string.Empty;
+    public string ContentType { get; init; } = string.Empty;
+    public long FileSize { get; init; }
     public string FileSizeFormatted { get; init; } = string.Empty;
+    public string ChecksumHex { get; init; } = string.Empty;
     public string? ChangeNote { get; init; }
     public string UploadedByName { get; init; } = string.Empty;
     public DateTime UploadedAt { get; init; }
     public bool IsCurrentVersion { get; init; }
 }
+
+/// <summary>Resolved file metadata for streaming download (internal to API layer).</summary>
+public sealed record DocumentFileMetadataDto(
+    string BlobPath,
+    string DownloadFileName,
+    string ContentType,
+    long FileSize,
+    string ChecksumHex);
+
+/// <summary>How the client should obtain bytes: SAS URL or authenticated API stream.</summary>
+public sealed record DocumentDownloadInfoDto(
+    string Mode,
+    string? SasUrl,
+    DateTimeOffset? SasExpiresAt,
+    string? ApiRelativeUrl,
+    string FileName,
+    string ContentType,
+    long FileSize,
+    string ChecksumHex);
 
 public sealed record WorkflowStatusDto
 {

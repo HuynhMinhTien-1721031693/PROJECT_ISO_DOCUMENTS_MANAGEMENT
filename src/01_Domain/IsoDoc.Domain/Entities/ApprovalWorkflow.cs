@@ -107,7 +107,7 @@ public sealed class ApprovalWorkflow : BaseEntity
         else
         {
             CurrentStepOrder = nextStep.StepOrder;
-            AddDomainEvent(new WorkflowStepAdvancedEvent(DocumentId, nextStep.ApproverId, nextStep.StepOrder));
+            AddDomainEvent(new WorkflowStepAdvancedEvent(DocumentId, Id, nextStep.ApproverId, nextStep.StepOrder));
         }
     }
 

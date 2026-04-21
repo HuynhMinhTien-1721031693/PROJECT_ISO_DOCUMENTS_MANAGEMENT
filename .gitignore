@@ -17,3 +17,6 @@ obj/
 
 ## Cursor local metadata
 .cursor/
+
+## Local runtime uploads (dev blob storage)
+src/04_WebAPI/IsoDoc.WebAPI/App_Data/

@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+**/.vs/
+**/.vscode/
+**/.git/
+**/.cursor/
+**/TestResults/
+**/*.user
+**/debug*.log
+**/node_modules/
+_publish_test/

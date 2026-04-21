@@ -2,14 +2,30 @@
 @inject AuthService AuthService
 
 <aside class="sidebar">
-    <h2>ISO DMS</h2>
-    <p>Document Management</p>
+    <div class="sidebar-header-row">
+        <div>
+            <h2>ISO DMS</h2>
+            <p>Document Management</p>
+        </div>
+        <NotificationBell />
+    </div>
 
     <nav>
         <NavLink href="/" Match="NavLinkMatch.All">Dashboard</NavLink>
         <NavLink href="/documents">Documents</NavLink>
         <NavLink href="/new-document">New Document</NavLink>
         <NavLink href="/workflow">Workflow</NavLink>
+        <AuthorizeView Roles="SystemAdmin,ISOManager,ISMSOfficer">
+            <Authorized>
+                <NavLink href="/audit">Audit log</NavLink>
+                <NavLink href="/reports">Báo cáo tuân thủ</NavLink>
+            </Authorized>
+        </AuthorizeView>
+        <AuthorizeView Roles="SystemAdmin">
+            <Authorized>
+                <NavLink href="/admin/users">Admin — Users</NavLink>
+            </Authorized>
+        </AuthorizeView>
         <NavLink href="/settings">Settings</NavLink>
     </nav>
 

@@ -26,6 +26,15 @@ public sealed class ApiClient
         return await SendWrappedAsync<T>(() => new HttpRequestMessage(HttpMethod.Get, path), ct);
     }
 
+    public async Task<(byte[]? Data, string? Error)> GetBytesAsync(string path, CancellationToken ct = default)
+    {
+        var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, path), ct);
+        if (!response.IsSuccessStatusCode)
+            return (null, await response.Content.ReadAsStringAsync(ct));
+
+        return (await response.Content.ReadAsByteArrayAsync(ct), null);
+    }
+
     public async Task<(T? Data, string? Error)> PostWrappedAsync<T>(
         string path,
         HttpContent content,
@@ -40,6 +49,12 @@ public sealed class ApiClient
         return (data, error);
     }
 
+    public async Task<(T? Data, string? Error)> PostWrappedEmptyAsync<T>(string path, CancellationToken ct = default)
+    {
+        var (data, _, error) = await SendWrappedAsync<T>(() => new HttpRequestMessage(HttpMethod.Post, path), ct);
+        return (data, error);
+    }
+
     public async Task<(bool Ok, string? Error)> PostWithoutContentAsync(
         string path,
         object payload,
@@ -48,6 +63,51 @@ public sealed class ApiClient
         var response = await SendAsync(() =>
         {
             var request = new HttpRequestMessage(HttpMethod.Post, path)
+            {
+                Content = JsonContent.Create(payload)
+            };
+            return request;
+        }, ct);
+
+        if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NoContent)
+            return (true, null);
+
+        var body = await response.Content.ReadAsStringAsync(ct);
+        return (false, body);
+    }
+
+    public async Task<(bool Ok, string? Error)> PutJsonAsync(
+        string path,
+        object payload,
+        CancellationToken ct = default)
+    {
+        var response = await SendAsync(() =>
+            new HttpRequestMessage(HttpMethod.Put, path) { Content = JsonContent.Create(payload) }, ct);
+
+        if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NoContent)
+            return (true, null);
+
+        return (false, await response.Content.ReadAsStringAsync(ct));
+    }
+
+    public async Task<(bool Ok, string? Error)> DeleteAsync(string path, CancellationToken ct = default)
+    {
+        var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Delete, path), ct);
+
+        if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NoContent)
+            return (true, null);
+
+        return (false, await response.Content.ReadAsStringAsync(ct));
+    }
+
+    public async Task<(bool Ok, string? Error)> PutWithoutContentAsync(
+        string path,
+        object payload,
+        CancellationToken ct = default)
+    {
+        var response = await SendAsync(() =>
+        {
+            var request = new HttpRequestMessage(HttpMethod.Put, path)
             {
                 Content = JsonContent.Create(payload)
             };

@@ -60,3 +60,12 @@ public sealed class InsufficientPermissionException : DomainException
         : base($"User '{userId}' does not have the required permission: '{requiredPermission}'.") { }
 }
 
+/// <summary>
+/// Thrown when persistence attempts to update or delete an audit log row (append-only trail).
+/// </summary>
+public sealed class ImmutableAuditTrailException : DomainException
+{
+    public ImmutableAuditTrailException()
+        : base("Audit log entries are append-only; updates and deletes are not permitted.") { }
+}
+

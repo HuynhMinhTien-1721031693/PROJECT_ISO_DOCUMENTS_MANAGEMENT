@@ -2,9 +2,12 @@
     <Found Context="routeData">
         <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
             <NotAuthorized>
-                <LayoutView Layout="typeof(Layout.MainLayout)">
-                    <p class="error-banner">Bạn chưa đăng nhập hoặc không có quyền truy cập trang này.</p>
-                    <a class="btn-primary-link" href="/login">Đi tới trang đăng nhập</a>
+                <LayoutView Layout="typeof(Layout.EmptyLayout)">
+                    <section class="card" style="max-width: 620px; margin: 80px auto;">
+                        <h1>Bạn chưa đăng nhập</h1>
+                        <p class="muted">Vui lòng đăng nhập để truy cập hệ thống quản lý tài liệu ISO.</p>
+                        <a class="btn-primary-link" href="/login">Đi tới trang đăng nhập</a>
+                    </section>
                 </LayoutView>
             </NotAuthorized>
         </AuthorizeRouteView>

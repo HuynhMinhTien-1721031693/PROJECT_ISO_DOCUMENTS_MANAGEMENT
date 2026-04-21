@@ -1,5 +1,8 @@
 using AutoMapper;
+using IsoDoc.Application.Common.Interfaces;
 using IsoDoc.Application.Common.Models;
+using IsoDoc.Domain.Entities;
+using IsoDoc.Domain.Enums;
 using IsoDoc.Domain.Interfaces;
 using MediatR;
 
@@ -12,15 +15,18 @@ public sealed class GetDocumentByIdQueryHandler : IRequestHandler<GetDocumentByI
 {
     private readonly IDocumentRepository _documents;
     private readonly IApprovalWorkflowRepository _workflows;
+    private readonly IUserDirectoryLookup _directory;
     private readonly IMapper _mapper;
 
     public GetDocumentByIdQueryHandler(
         IDocumentRepository documents,
         IApprovalWorkflowRepository workflows,
+        IUserDirectoryLookup directory,
         IMapper mapper)
     {
         _documents = documents;
         _workflows = workflows;
+        _directory = directory;
         _mapper = mapper;
     }
 
@@ -50,11 +56,40 @@ public sealed class GetDocumentByIdQueryHandler : IRequestHandler<GetDocumentByI
         }
 
         var active = await _workflows.GetActiveWorkflowAsync(document.Id, ct);
-        if (active is not null)
-        {
-            dto = dto with { ActiveWorkflow = _mapper.Map<WorkflowStatusDto>(active) };
-        }
+        var workflow = active ?? await _workflows.GetLatestWorkflowForDocumentAsync(document.Id, ct);
+        if (workflow is not null)
+            dto = dto with { ActiveWorkflow = EnrichWorkflow(workflow) };
 
         return Result<DocumentDto>.Success(dto);
+    }
+
+    private WorkflowStatusDto EnrichWorkflow(ApprovalWorkflow workflow)
+    {
+        var dto = _mapper.Map<WorkflowStatusDto>(workflow);
+        var steps = workflow.Steps
+            .OrderBy(s => s.StepOrder)
+            .Select(s =>
+            {
+                var stepDto = _mapper.Map<ApprovalStepDto>(s);
+                var name = _directory.TryGetDisplayName(s.ApproverId)
+                    ?? _directory.TryGetEmail(s.ApproverId)
+                    ?? s.ApproverId.ToString("N")[..8];
+                return stepDto with { ApproverName = name };
+            })
+            .ToList();
+
+        string? currentName = null;
+        if (workflow.Status == WorkflowStatus.InProgress)
+        {
+            var current = workflow.Steps.SingleOrDefault(s =>
+                s.StepOrder == workflow.CurrentStepOrder && s.Decision == WorkflowDecision.Pending);
+            if (current is not null)
+            {
+                currentName = _directory.TryGetDisplayName(current.ApproverId)
+                    ?? _directory.TryGetEmail(current.ApproverId);
+            }
+        }
+
+        return dto with { Steps = steps, CurrentApproverName = currentName };
     }
 }

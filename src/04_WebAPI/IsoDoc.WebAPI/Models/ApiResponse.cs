@@ -65,9 +65,10 @@ public abstract class ApiControllerBase : ControllerBase
 
         return result.ErrorCode switch
         {
-            "DOCUMENT_NOT_FOUND" or "WORKFLOW_NOT_FOUND" => NotFound(Problem(result.Error)),
+            "DOCUMENT_NOT_FOUND" or "WORKFLOW_NOT_FOUND" or "VERSION_NOT_FOUND" or "NOT_FOUND" =>
+                NotFound(Problem(result.Error, StatusCodes.Status404NotFound)),
             "DOCUMENT_CODE_DUPLICATE" => Conflict(Problem(result.Error)),
-            "UNAUTHORIZED" => Forbid(),
+            "UNAUTHORIZED" or "FORBIDDEN" => Forbid(),
             _ => UnprocessableEntity(Problem(result.Error))
         };
     }
@@ -76,13 +77,20 @@ public abstract class ApiControllerBase : ControllerBase
     {
         if (result.IsSuccess)
             return NoContent();
-        return UnprocessableEntity(Problem(result.Error));
+
+        return result.ErrorCode switch
+        {
+            "DOCUMENT_NOT_FOUND" or "WORKFLOW_NOT_FOUND" or "VERSION_NOT_FOUND" or "NOT_FOUND" =>
+                NotFound(Problem(result.Error, StatusCodes.Status404NotFound)),
+            "UNAUTHORIZED" or "FORBIDDEN" => Forbid(),
+            _ => UnprocessableEntity(Problem(result.Error))
+        };
     }
 
-    private static ProblemDetails Problem(string? detail) => new()
+    private static ProblemDetails Problem(string? detail, int status = StatusCodes.Status422UnprocessableEntity) => new()
     {
         Detail = detail,
-        Status = StatusCodes.Status422UnprocessableEntity
+        Status = status
     };
 }
 }

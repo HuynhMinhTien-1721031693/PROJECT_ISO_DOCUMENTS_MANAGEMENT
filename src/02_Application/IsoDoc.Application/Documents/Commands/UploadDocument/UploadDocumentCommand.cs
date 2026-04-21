@@ -32,15 +32,6 @@ public sealed record UploadDocumentCommand : IRequest<Result<Guid>>
 
 public sealed class UploadDocumentCommandValidator : AbstractValidator<UploadDocumentCommand>
 {
-    private static readonly string[] AllowedContentTypes =
-    {
-        "application/pdf",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    };
-
-    private const long MaxFileSizeBytes = 50 * 1024 * 1024;
-
     public UploadDocumentCommandValidator()
     {
         RuleFor(x => x.Title)
@@ -73,13 +64,13 @@ public sealed class UploadDocumentCommandValidator : AbstractValidator<UploadDoc
             .NotEmpty().WithMessage("Tên file không được để trống.");
 
         RuleFor(x => x.ContentType)
-            .Must(ct => AllowedContentTypes.Contains(ct))
+            .Must(ct => DocumentFileUploadRules.AllowedContentTypes.Contains(ct))
             .WithMessage("Chỉ chấp nhận file PDF, DOCX hoặc XLSX.");
 
         RuleFor(x => x.FileSize)
             .GreaterThan(0).WithMessage("File không được rỗng.")
-            .LessThanOrEqualTo(MaxFileSizeBytes)
-            .WithMessage($"Dung lượng file không vượt quá {MaxFileSizeBytes / 1024 / 1024} MB.");
+            .LessThanOrEqualTo(DocumentFileUploadRules.MaxFileSizeBytes)
+            .WithMessage($"Dung lượng file không vượt quá {DocumentFileUploadRules.MaxFileSizeBytes / 1024 / 1024} MB.");
 
         RuleFor(x => x.ChecksumHex)
             .NotEmpty().WithMessage("Checksum SHA-256 bắt buộc phải có.")

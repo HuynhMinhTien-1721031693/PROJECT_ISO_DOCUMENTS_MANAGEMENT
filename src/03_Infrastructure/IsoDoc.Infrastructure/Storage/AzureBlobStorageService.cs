@@ -1,6 +1,7 @@
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Azure.Storage.Sas;
+using IsoDoc.Application.Common.Configuration;
 using IsoDoc.Domain.Interfaces;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -54,6 +55,18 @@ public sealed class AzureBlobStorageService : IFileStorageService
         return blobPath;
     }
 
+    public bool SupportsTimeLimitedPublicUrls => true;
+
+    public async Task<Stream> OpenReadAsync(string blobPath, CancellationToken ct = default)
+    {
+        if (blobPath.Contains("..", StringComparison.Ordinal))
+            throw new ArgumentException("Invalid blob path.", nameof(blobPath));
+
+        var container = _blobService.GetBlobContainerClient(_options.ContainerName);
+        var blobClient = container.GetBlobClient(blobPath);
+        return await blobClient.OpenReadAsync(cancellationToken: ct);
+    }
+
     public Task<string> GetSecureDownloadUrlAsync(string blobPath, TimeSpan expiry, CancellationToken ct = default)
     {
         var container = _blobService.GetBlobContainerClient(_options.ContainerName);
@@ -86,12 +99,4 @@ public sealed class AzureBlobStorageService : IFileStorageService
         var clean = new string(fileName.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
         return clean.Length > 100 ? clean[..100] : clean;
     }
-}
-
-public sealed class BlobStorageOptions
-{
-    public const string Section = "BlobStorage";
-    public string ConnectionString { get; set; } = string.Empty;
-    public string ContainerName { get; set; } = "iso-documents";
-    public int SasExpiryHours { get; set; } = 1;
 }

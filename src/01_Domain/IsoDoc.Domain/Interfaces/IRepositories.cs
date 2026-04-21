@@ -22,8 +22,17 @@ public interface IDocumentRepository
     Task<IReadOnlyList<Document>> GetByStatusAsync(DocumentStatus status, CancellationToken ct = default);
     Task<IReadOnlyList<Document>> GetByOwnerAsync(Guid ownerId, CancellationToken ct = default);
 
+    /// <summary>All non-deleted documents for compliance reporting (status histograms).</summary>
+    Task<IReadOnlyList<Document>> GetAllForReportingAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Relational search when Elasticsearch is down (code, title, description, tags, filters, dates).
+    /// </summary>
+    Task<SearchResult> SearchDocumentsAsync(SearchQuery query, CancellationToken ct = default);
+
     Task AddAsync(Document document, CancellationToken ct = default);
     void Update(Document document);
+    void Remove(Document document);
     Task<int> SaveChangesAsync(CancellationToken ct = default);
 }
 
@@ -32,10 +41,79 @@ public interface IApprovalWorkflowRepository
     Task<ApprovalWorkflow?> GetByIdAsync(Guid workflowId, CancellationToken ct = default);
     Task<ApprovalWorkflow?> GetByDocumentIdAsync(Guid documentId, CancellationToken ct = default);
     Task<ApprovalWorkflow?> GetActiveWorkflowAsync(Guid documentId, CancellationToken ct = default);
+    Task<ApprovalWorkflow?> GetLatestWorkflowForDocumentAsync(Guid documentId, CancellationToken ct = default);
     Task<IReadOnlyList<ApprovalWorkflow>> GetPendingForApproverAsync(Guid approverId, CancellationToken ct = default);
+
+    /// <summary>Workflow instances for SLA / cycle-time reporting.</summary>
+    Task<IReadOnlyList<ApprovalWorkflow>> GetAllForReportingAsync(CancellationToken ct = default);
 
     Task AddAsync(ApprovalWorkflow workflow, CancellationToken ct = default);
     void Update(ApprovalWorkflow workflow);
+}
+
+public interface IUserNotificationRepository
+{
+    Task<UserNotification> AddAsync(UserNotification notification, CancellationToken ct = default);
+    Task<(IReadOnlyList<UserNotification> Items, int TotalCount)> GetPageForUserAsync(
+        Guid userId,
+        int page,
+        int pageSize,
+        bool unreadOnly,
+        CancellationToken ct = default);
+    Task<UserNotification?> GetByIdForUserAsync(Guid id, Guid userId, CancellationToken ct = default);
+    Task<int> GetUnreadCountAsync(Guid userId, CancellationToken ct = default);
+    Task MarkReadAsync(Guid id, Guid userId, CancellationToken ct = default);
+    Task MarkAllReadAsync(Guid userId, CancellationToken ct = default);
+}
+
+/// <summary>Immutable audit row as returned from the read store.</summary>
+public sealed record AuditLogReadModel(
+    Guid Id,
+    Guid? UserId,
+    string Action,
+    string? EntityType,
+    string? EntityId,
+    string? IpAddress,
+    DateTime OccurredAtUtc);
+
+public sealed record AuditLogSearchCriteria(
+    Guid? UserId,
+    string? Action,
+    string? EntityType,
+    string? EntityId,
+    DateTime? FromUtc,
+    DateTime? ToUtc,
+    int Page,
+    int PageSize);
+
+public interface IAuditLogReadRepository
+{
+    Task<(IReadOnlyList<AuditLogReadModel> Items, int TotalCount)> SearchAsync(
+        AuditLogSearchCriteria criteria,
+        CancellationToken ct = default);
+}
+
+public sealed record DocumentStatusCountRow(DocumentStatus Status, int Count);
+
+public sealed record ApprovalSlaReportRow(
+    Guid WorkflowId,
+    Guid DocumentId,
+    string DocumentCode,
+    string DocumentTitle,
+    DateTime StartedAtUtc,
+    DateTime? CompletedAtUtc,
+    WorkflowStatus WorkflowStatus,
+    double? ClosedCycleHours,
+    double? OpenWaitingHours);
+
+public interface IComplianceReportRepository
+{
+    Task<IReadOnlyList<DocumentStatusCountRow>> GetDocumentCountsByStatusAsync(CancellationToken ct = default);
+
+    Task<IReadOnlyList<ApprovalSlaReportRow>> GetApprovalSlaRowsAsync(
+        DateTime? completedFromUtc,
+        DateTime? completedToUtc,
+        CancellationToken ct = default);
 }
 
 /// <summary>
@@ -56,6 +134,12 @@ public interface IFileStorageService
         string blobPath,
         TimeSpan expiry,
         CancellationToken ct = default);
+
+    /// <summary>Opens a read stream to the stored object (for authenticated proxy download).</summary>
+    Task<Stream> OpenReadAsync(string blobPath, CancellationToken ct = default);
+
+    /// <summary>True when <see cref="GetSecureDownloadUrlAsync"/> can produce a public time-limited URL.</summary>
+    bool SupportsTimeLimitedPublicUrls { get; }
 
     Task DeleteAsync(string blobPath, CancellationToken ct = default);
 }
@@ -111,7 +195,9 @@ public record SearchQuery(
     DateTime? FromDate = null,
     DateTime? ToDate = null,
     int Page = 1,
-    int PageSize = 20);
+    int PageSize = 20,
+    string SortBy = "UpdatedAt",
+    bool SortDesc = true);
 
 public record SearchResult(
     IReadOnlyList<SearchHit> Hits,
@@ -124,7 +210,9 @@ public record SearchHit(
     string DocumentCode,
     string Title,
     string Status,
+    string Category,
     string Standard,
+    DateTime UpdatedAt,
     double Score,
     IReadOnlyList<string> Highlights);
 

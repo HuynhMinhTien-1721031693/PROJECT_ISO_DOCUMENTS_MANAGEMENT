@@ -74,6 +74,8 @@ public sealed class Document : BaseAuditableEntity
         return doc;
     }
 
+    private void RequestSearchIndexSync() => AddDomainEvent(new DocumentIndexSyncEvent(Id));
+
     // ── State transition methods ─────────────────────────────────────────────
 
     /// <summary>Submit to approval workflow. Draft → UnderReview.</summary>
@@ -89,6 +91,7 @@ public sealed class Document : BaseAuditableEntity
         UpdatedBy = submittedBy;
 
         AddDomainEvent(new DocumentSubmittedForReviewEvent(Id, submittedBy));
+        RequestSearchIndexSync();
     }
 
     /// <summary>QA/Safety/ISO officer approves → moves to PendingFinalApproval.</summary>
@@ -99,6 +102,8 @@ public sealed class Document : BaseAuditableEntity
         Status = DocumentStatus.PendingFinalApproval;
         UpdatedAt = DateTime.UtcNow;
         UpdatedBy = approvedBy;
+
+        RequestSearchIndexSync();
     }
 
     /// <summary>ISO Manager final sign-off. PendingFinalApproval → Published.</summary>
@@ -116,6 +121,7 @@ public sealed class Document : BaseAuditableEntity
         UpdatedAt = DateTime.UtcNow;
         UpdatedBy = approvedBy;
 
+        RequestSearchIndexSync();
         AddDomainEvent(new DocumentPublishedEvent(Id, Code, CurrentVersion, approvedBy));
     }
 
@@ -134,6 +140,7 @@ public sealed class Document : BaseAuditableEntity
         UpdatedBy = rejectedBy;
 
         AddDomainEvent(new DocumentRejectedEvent(Id, rejectedBy, reason));
+        RequestSearchIndexSync();
     }
 
     /// <summary>Return a Rejected document to Draft for revision.</summary>
@@ -144,6 +151,8 @@ public sealed class Document : BaseAuditableEntity
         Status = DocumentStatus.Draft;
         UpdatedAt = DateTime.UtcNow;
         UpdatedBy = revisedBy;
+
+        RequestSearchIndexSync();
     }
 
     /// <summary>Archive a Published document (superseded by newer version).</summary>
@@ -156,6 +165,7 @@ public sealed class Document : BaseAuditableEntity
         UpdatedBy = archivedBy;
 
         AddDomainEvent(new DocumentArchivedEvent(Id, archivedBy));
+        RequestSearchIndexSync();
     }
 
     // ── Version management ─────────────────────────────────────────────────
@@ -216,6 +226,8 @@ public sealed class Document : BaseAuditableEntity
 
         UpdatedAt = DateTime.UtcNow;
         UpdatedBy = updatedBy;
+
+        RequestSearchIndexSync();
     }
 
     // ── Private helpers ────────────────────────────────────────────────────

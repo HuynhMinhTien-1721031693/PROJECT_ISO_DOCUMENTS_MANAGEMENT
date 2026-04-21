@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using IsoDoc.Application.Common.Identity;
 using IsoDoc.Application.Common.Interfaces;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
@@ -14,7 +15,13 @@ public sealed class JwtTokenService : IJwtTokenService
 
     public JwtTokenService(IOptions<JwtOptions> options) => _options = options.Value;
 
-    public string CreateAccessToken(Guid userId, string? email, IEnumerable<string> roles, TimeSpan? lifetime = null)
+    public string CreateAccessToken(
+        Guid userId,
+        string? email,
+        IEnumerable<string> roles,
+        TimeSpan? lifetime = null,
+        string? displayName = null,
+        Guid? departmentId = null)
     {
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SecretKey));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
@@ -30,6 +37,13 @@ public sealed class JwtTokenService : IJwtTokenService
             claims.Add(new Claim(JwtRegisteredClaimNames.Email, email));
             claims.Add(new Claim(ClaimTypes.Email, email));
         }
+        if (!string.IsNullOrWhiteSpace(displayName))
+        {
+            claims.Add(new Claim(ClaimTypes.Name, displayName));
+            claims.Add(new Claim(JwtRegisteredClaimNames.Name, displayName));
+        }
+        if (departmentId is { } dept && dept != Guid.Empty)
+            claims.Add(new Claim(IsoDocClaimTypes.DepartmentId, dept.ToString()));
         claims.AddRange(roles.Where(r => !string.IsNullOrWhiteSpace(r)).Select(r => new Claim(ClaimTypes.Role, r)));
 
         var token = new JwtSecurityToken(
@@ -80,7 +94,10 @@ public sealed class CurrentUserService : ICurrentUserService
     public Guid? UserId => User?.FindFirstValue(ClaimTypes.NameIdentifier) is string id
         && Guid.TryParse(id, out var guid) ? guid : null;
 
-    public Guid DepartmentId => Guid.Empty;
+    public Guid DepartmentId =>
+        User?.FindFirstValue(IsoDocClaimTypes.DepartmentId) is string s && Guid.TryParse(s, out var id)
+            ? id
+            : Guid.Empty;
     public string? Email => User?.FindFirstValue(ClaimTypes.Email) ?? User?.FindFirstValue(JwtRegisteredClaimNames.Email);
     public string? FullName => User?.FindFirstValue(ClaimTypes.Name) ?? User?.FindFirstValue(JwtRegisteredClaimNames.Name);
     public bool IsAuthenticated => User?.Identity?.IsAuthenticated ?? false;
@@ -139,6 +156,7 @@ public sealed class PermissionService : IPermissionService
                     permissions.Add(Permissions.UserManage);
                     permissions.Add(Permissions.RoleAssign);
                     permissions.Add(Permissions.AuditLogView);
+                    permissions.Add(Permissions.ComplianceReportView);
                     break;
 
                 case "ISOManager":
@@ -146,6 +164,8 @@ public sealed class PermissionService : IPermissionService
                     permissions.Add(Permissions.DocumentArchive);
                     permissions.Add(Permissions.DocumentViewAll);
                     permissions.Add(Permissions.WorkflowViewPending);
+                    permissions.Add(Permissions.AuditLogView);
+                    permissions.Add(Permissions.ComplianceReportView);
                     break;
 
                 case "DocumentController":
@@ -157,10 +177,17 @@ public sealed class PermissionService : IPermissionService
 
                 case "QAOfficer":
                 case "SafetyOfficer":
+                    permissions.Add(Permissions.DocumentApprove);
+                    permissions.Add(Permissions.WorkflowViewPending);
+                    permissions.Add(Permissions.DocumentViewAll);
+                    break;
+
                 case "ISMSOfficer":
                     permissions.Add(Permissions.DocumentApprove);
                     permissions.Add(Permissions.WorkflowViewPending);
                     permissions.Add(Permissions.DocumentViewAll);
+                    permissions.Add(Permissions.AuditLogView);
+                    permissions.Add(Permissions.ComplianceReportView);
                     break;
             }
         }

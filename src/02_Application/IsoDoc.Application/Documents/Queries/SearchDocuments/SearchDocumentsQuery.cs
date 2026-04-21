@@ -68,7 +68,9 @@ public sealed class SearchDocumentsQueryHandler
             FromDate: query.FromDate,
             ToDate: query.ToDate,
             Page: query.Page,
-            PageSize: query.PageSize);
+            PageSize: query.PageSize,
+            SortBy: query.SortBy,
+            SortDesc: query.SortDesc);
 
         var result = await _searchService.SearchAsync(searchQuery, ct);
 
@@ -80,10 +82,10 @@ public sealed class SearchDocumentsQueryHandler
                 Title = hit.Title,
                 Status = hit.Status,
                 IsoStandard = hit.Standard,
-                Category = string.Empty,
+                Category = hit.Category,
                 CurrentVersion = string.Empty,
                 OwnerName = string.Empty,
-                UpdatedAt = DateTime.UtcNow,
+                UpdatedAt = hit.UpdatedAt,
                 HighlightedFragments = hit.Highlights
             })
             .ToList();

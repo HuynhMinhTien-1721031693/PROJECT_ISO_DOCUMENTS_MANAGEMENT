@@ -35,6 +35,10 @@ builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<ApiClient>();
 builder.Services.AddScoped<DocumentApiService>();
 builder.Services.AddScoped<WorkflowApiService>();
+builder.Services.AddScoped<NotificationsApiService>();
+builder.Services.AddScoped<NotificationSignalRService>();
+builder.Services.AddScoped<ComplianceApiService>();
+builder.Services.AddScoped<AdminUsersApiService>();
 
 var app = builder.Build();
 
@@ -46,7 +50,8 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 app.UseStatusCodePagesWithReExecute("/not-found");
-app.UseHttpsRedirection();
+if (!string.Equals(app.Environment.EnvironmentName, "Docker", StringComparison.OrdinalIgnoreCase))
+    app.UseHttpsRedirection();
 app.UseStaticFiles();
 
 app.UseAuthentication();

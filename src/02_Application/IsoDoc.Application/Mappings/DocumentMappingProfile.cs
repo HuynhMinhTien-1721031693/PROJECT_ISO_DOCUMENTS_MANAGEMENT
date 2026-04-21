@@ -1,4 +1,5 @@
 using AutoMapper;
+using IsoDoc.Application.Common;
 using IsoDoc.Application.Common.Models;
 using IsoDoc.Domain.Entities;
 
@@ -29,7 +30,11 @@ public sealed class DocumentMappingProfile : Profile
 
         CreateMap<DocumentVersion, DocumentVersionDto>()
             .ForMember(dst => dst.FileType, opt => opt.MapFrom(src => src.FileType.ToString()))
+            .ForMember(dst => dst.OriginalFileName, opt => opt.MapFrom(src => DocumentBlobPathParser.OriginalFileName(src.BlobPath)))
+            .ForMember(dst => dst.ContentType, opt => opt.MapFrom(src => DocumentFileMime.ForFileType(src.FileType)))
+            .ForMember(dst => dst.FileSize, opt => opt.MapFrom(src => src.FileSize))
             .ForMember(dst => dst.FileSizeFormatted, opt => opt.MapFrom(src => src.FileSizeFormatted))
+            .ForMember(dst => dst.ChecksumHex, opt => opt.MapFrom(src => src.Checksum.Value))
             .ForMember(dst => dst.UploadedByName, opt => opt.Ignore());
 
         CreateMap<ApprovalWorkflow, WorkflowStatusDto>()
@@ -43,5 +48,6 @@ public sealed class DocumentMappingProfile : Profile
             .ForMember(dst => dst.Decision, opt => opt.MapFrom(src => src.Decision.ToString()))
             .ForMember(dst => dst.ApproverName, opt => opt.Ignore());
     }
+
 }
 

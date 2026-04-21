@@ -47,7 +47,7 @@ else if (!string.IsNullOrWhiteSpace(Error))
         var (items, pagination, error) = await DocumentApiService.SearchAsync(SearchParams);
         Busy = false;
         DocumentsData = items;
-        Error = error ?? string.Empty;
+        Error = string.IsNullOrWhiteSpace(error) ? string.Empty : ApiProblemMessageFormatter.Format(error);
         TotalPages = pagination?.TotalPages is > 0 ? pagination.TotalPages : 1;
     }
 

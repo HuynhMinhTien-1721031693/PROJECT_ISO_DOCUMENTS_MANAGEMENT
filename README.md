@@ -29,6 +29,12 @@ Tài liệu tổng quan chi tiết: `ISO_DMS_V3_Architecture.md`
 - `JWT Bearer`
 - `Serilog`
 
+## Chạy bằng Docker (demo)
+
+Xem **`DOCKER.md`**: `docker compose up --build` (SQL Server + Elasticsearch + API + Blazor).
+
+Hướng dẫn sử dụng tổng quát (Docker + local): **`HUONG_DAN_SU_DUNG.md`**.
+
 ## Chạy nhanh local
 
 ### 1) Yêu cầu

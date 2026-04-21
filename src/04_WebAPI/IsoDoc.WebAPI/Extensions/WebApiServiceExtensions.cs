@@ -1,7 +1,14 @@
 using System.Text;
+using System.Threading.RateLimiting;
 using IsoDoc.Infrastructure.Identity;
+using IsoDoc.Infrastructure.Notifications;
+using IsoDoc.Infrastructure.Search;
 using IsoDoc.WebAPI.Middleware;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Hosting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 
@@ -74,11 +81,27 @@ public static class WebApiServiceExtensions
                     ValidateLifetime = true,
                     ClockSkew = TimeSpan.Zero
                 };
+                opts.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = context =>
+                    {
+                        var accessToken = context.Request.Query["access_token"];
+                        var path = context.HttpContext.Request.Path;
+                        if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
+                            context.Token = accessToken;
+                        return Task.CompletedTask;
+                    }
+                };
             });
+
+        services.AddSingleton<IUserIdProvider, SignalRUserIdProvider>();
+        services.AddSignalR();
 
         services.AddAuthorizationBuilder()
             .AddPolicy("RequireController", p => p.RequireRole("DocumentController", "ISOManager", "SystemAdmin"))
-            .AddPolicy("RequireApprover", p => p.RequireRole("QAOfficer", "SafetyOfficer", "ISMSOfficer", "ISOManager"))
+            .AddPolicy(
+                "RequireApprover",
+                p => p.RequireRole("QAOfficer", "SafetyOfficer", "ISMSOfficer", "ISOManager", "SystemAdmin"))
             .AddPolicy("RequireISOManager", p => p.RequireRole("ISOManager", "SystemAdmin"))
             .AddPolicy("RequireSystemAdmin", p => p.RequireRole("SystemAdmin"))
             .AddPolicy("RequireViewer", p => p.RequireAuthenticatedUser());
@@ -94,7 +117,38 @@ public static class WebApiServiceExtensions
                       .AllowAnyHeader()
                       .AllowCredentials()));
 
-        services.AddHealthChecks();
+        var healthChecks = services.AddHealthChecks();
+        if (configuration.GetSection(ElasticsearchOptions.Section).GetValue("ParticipateInHealthChecks", false))
+        {
+            healthChecks.AddCheck<ElasticsearchHealthCheck>(
+                "elasticsearch",
+                failureStatus: HealthStatus.Degraded,
+                tags: new[] { "elasticsearch", "ready" });
+        }
+
+        services.AddRateLimiter(options =>
+        {
+            options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            options.AddPolicy("login", httpContext =>
+            {
+                var env = httpContext.RequestServices.GetRequiredService<IHostEnvironment>();
+                var permitLimit = string.Equals(
+                        env.EnvironmentName,
+                        "IntegrationTests",
+                        StringComparison.OrdinalIgnoreCase)
+                    ? 10_000
+                    : configuration.GetValue("RateLimiting:LoginPermitPerMinute", 40);
+                return RateLimitPartition.GetFixedWindowLimiter(
+                    httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                    _ => new FixedWindowRateLimiterOptions
+                    {
+                        AutoReplenishment = true,
+                        PermitLimit = permitLimit,
+                        Window = TimeSpan.FromMinutes(1),
+                        QueueLimit = 0
+                    });
+            });
+        });
 
         return services;
     }

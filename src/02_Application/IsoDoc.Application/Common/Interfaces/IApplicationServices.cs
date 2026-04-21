@@ -24,6 +24,13 @@ public interface INotificationSender
     Task SendInAppNotificationAsync(Guid userId, string title, string message, string? actionUrl = null, CancellationToken ct = default);
 }
 
+/// <summary>Resolves user contact info from the configured identity store (intranet / dev auth users).</summary>
+public interface IUserDirectoryLookup
+{
+    string? TryGetEmail(Guid userId);
+    string? TryGetDisplayName(Guid userId);
+}
+
 public interface IApproverResolverService
 {
     Task<(Guid Step1ApproverId, Guid Step2ApproverId)> ResolveAsync(IsoStandard standard, CancellationToken ct = default);
@@ -42,5 +49,6 @@ public static class Permissions
     public const string UserManage = "user:manage";
     public const string RoleAssign = "role:assign";
     public const string AuditLogView = "audit:view";
+    public const string ComplianceReportView = "compliance:view";
 }
 

@@ -122,6 +122,12 @@ public sealed class ExceptionHandlingMiddleware
                 ex.Message,
                 (Dictionary<string, string[]>?)null),
 
+            ImmutableAuditTrailException => (
+                StatusCodes.Status403Forbidden,
+                "Vi pham tinh bat bien nhat ky kiem tra",
+                ex.Message,
+                (Dictionary<string, string[]>?)null),
+
             DomainException => (
                 StatusCodes.Status422UnprocessableEntity,
                 "Vi pham quy tac nghiep vu",

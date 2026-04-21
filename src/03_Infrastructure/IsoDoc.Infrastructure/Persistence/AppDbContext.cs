@@ -1,7 +1,11 @@
 using System.Reflection;
 using IsoDoc.Domain.Common;
 using IsoDoc.Domain.Entities;
+using IsoDoc.Domain.Exceptions;
+using IsoDoc.Infrastructure.Persistence.Identity;
 using MediatR;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 
 namespace IsoDoc.Infrastructure.Persistence;
@@ -9,7 +13,7 @@ namespace IsoDoc.Infrastructure.Persistence;
 /// <summary>
 /// Main EF Core DbContext for Infrastructure layer.
 /// </summary>
-public sealed class AppDbContext : DbContext
+public sealed class AppDbContext : IdentityDbContext<ApplicationUser, IdentityRole<Guid>, Guid>
 {
     private readonly IMediator _mediator;
 
@@ -24,15 +28,15 @@ public sealed class AppDbContext : DbContext
     public DbSet<ApprovalWorkflow> ApprovalWorkflows { get; set; } = null!;
     public DbSet<ApprovalWorkflow.ApprovalStep> ApprovalSteps { get; set; } = null!;
     public DbSet<AuditLog> AuditLogs { get; set; } = null!;
+    public DbSet<UserNotification> UserNotifications { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        base.OnModelCreating(modelBuilder);
         modelBuilder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
 
         modelBuilder.Entity<Document>()
             .HasQueryFilter(d => !d.IsDeleted);
-
-        base.OnModelCreating(modelBuilder);
     }
 
     public override async Task<int> SaveChangesAsync(CancellationToken ct = default)
@@ -61,6 +65,12 @@ public sealed class AppDbContext : DbContext
             .ToList();
 
         entitiesWithEvents.ForEach(e => e.ClearDomainEvents());
+
+        foreach (var entry in ChangeTracker.Entries<AuditLog>())
+        {
+            if (entry.State is EntityState.Modified or EntityState.Deleted)
+                throw new ImmutableAuditTrailException();
+        }
 
         var result = await base.SaveChangesAsync(ct);
 

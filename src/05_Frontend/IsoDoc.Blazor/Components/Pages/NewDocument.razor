@@ -1,6 +1,7 @@
 @page "/new-document"
 @attribute [Authorize]
 @inject DocumentApiService DocumentApiService
+@inject NavigationManager Navigation
 
 <h1>Upload New Document</h1>
 <p class="muted">Hỗ trợ PDF/DOCX/XLSX, dung lượng tối đa 50MB.</p>
@@ -73,10 +74,13 @@
         Busy = false;
         if (!string.IsNullOrWhiteSpace(error))
         {
-            Error = error;
+            Error = ApiProblemMessageFormatter.Format(error);
             return;
         }
 
-        Success = $"Upload thành công. Document ID: {id}";
+        if (id is not null)
+            Navigation.NavigateTo($"/documents/{id}");
+        else
+            Success = "Upload thành công.";
     }
 }

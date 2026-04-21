@@ -7,7 +7,13 @@ namespace IsoDoc.Application.Common.Interfaces;
 /// </summary>
 public interface IJwtTokenService
 {
-    string CreateAccessToken(Guid userId, string? email, IEnumerable<string> roles, TimeSpan? lifetime = null);
+    string CreateAccessToken(
+        Guid userId,
+        string? email,
+        IEnumerable<string> roles,
+        TimeSpan? lifetime = null,
+        string? displayName = null,
+        Guid? departmentId = null);
 
     ClaimsPrincipal? ValidateAccessToken(string token);
 }
