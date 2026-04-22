@@ -1,0 +1,97 @@
+<div class="card filters">
+    <div class="field">
+        <label>Keyword</label>
+        <input placeholder="Title hoặc code" @bind="Model.Keyword" />
+    </div>
+    <div class="field">
+        <label>Status</label>
+        <select @bind="Model.Status">
+            <option value="">All</option>
+            <option>Draft</option>
+            <option>UnderReview</option>
+            <option>PendingFinalApproval</option>
+            <option>Published</option>
+            <option>Rejected</option>
+            <option>Archived</option>
+        </select>
+    </div>
+    <div class="field">
+        <label>ISO Standard</label>
+        <select @bind="Model.Standard">
+            <option value="">All</option>
+            <option>ISO9001</option>
+            <option>ISO45001</option>
+            <option>ISO27001</option>
+        </select>
+    </div>
+    <div class="field">
+        <label>Category</label>
+        <select @bind="Model.Category">
+            <option value="">All</option>
+            <option>Policy</option>
+            <option>Procedure</option>
+            <option>WorkInstruction</option>
+            <option>Form</option>
+            <option>Record</option>
+            <option>Manual</option>
+            <option>Specification</option>
+        </select>
+    </div>
+    <div class="field">
+        <label>Cập nhật từ</label>
+        <InputDate @bind-Value="Model.FromDate" class="input-date" />
+    </div>
+    <div class="field">
+        <label>Đến</label>
+        <InputDate @bind-Value="Model.ToDate" class="input-date" />
+    </div>
+    <div class="field">
+        <label>Sắp xếp</label>
+        <select @bind="Model.SortBy">
+            <option value="UpdatedAt">Ngày cập nhật</option>
+            <option value="CreatedAt">Ngày tạo</option>
+            <option value="Title">Tiêu đề</option>
+            <option value="DocumentCode">Mã tài liệu</option>
+            <option value="Status">Trạng thái</option>
+        </select>
+    </div>
+    <div class="field">
+        <label>/ trang</label>
+        <select @bind="Model.PageSize">
+            <option value="10">10</option>
+            <option value="20">20</option>
+            <option value="50">50</option>
+        </select>
+    </div>
+    <div class="actions">
+        <button class="btn" @onclick="Apply">Apply</button>
+        <button class="btn secondary" @onclick="Reset">Reset</button>
+    </div>
+</div>
+
+@code {
+    [Parameter] public SearchDocumentsParams Model { get; set; } = new();
+    [Parameter] public EventCallback OnApply { get; set; }
+
+    private async Task Apply()
+    {
+        Model.Page = 1;
+        await OnApply.InvokeAsync();
+    }
+
+    private async Task Reset()
+    {
+        Model.Keyword = null;
+        Model.Status = null;
+        Model.Category = null;
+        Model.Standard = null;
+        Model.FromDate = null;
+        Model.ToDate = null;
+        Model.OwnerId = null;
+        Model.SortBy = "UpdatedAt";
+        Model.SortDesc = true;
+        Model.PageSize = 20;
+        Model.Page = 1;
+        await OnApply.InvokeAsync();
+    }
+}

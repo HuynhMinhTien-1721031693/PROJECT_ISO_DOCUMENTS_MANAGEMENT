@@ -1,0 +1,172 @@
+@page "/audit"
+@attribute [Authorize(Roles = "SystemAdmin,ISOManager,ISMSOfficer")]
+@using Microsoft.JSInterop
+@inject ComplianceApiService ComplianceApi
+@inject IJSRuntime JS
+
+<div class="page-head">
+    <div>
+        <h1>Nhật ký kiểm tra (Audit)</h1>
+        <p class="muted">Tra cứu append-only theo người dùng, hành động, thực thể và thời gian — phục vụ ISO 27001 / kiểm tra nội bộ.</p>
+    </div>
+</div>
+
+<section class="card" style="margin-bottom: 16px;">
+    <h2 style="margin-bottom: 12px;">Bộ lọc</h2>
+    <div class="filter-grid">
+        <label>UserId (GUID)
+            <InputText @bind-Value="UserIdText" class="form-control" placeholder="để trống = tất cả" />
+        </label>
+        <label>Hành động
+            <InputText @bind-Value="SearchParams.Action" class="form-control" />
+        </label>
+        <label>EntityType
+            <InputText @bind-Value="SearchParams.EntityType" class="form-control" />
+        </label>
+        <label>EntityId / DocumentId
+            <InputText @bind-Value="SearchParams.EntityId" class="form-control" />
+        </label>
+        <label>Từ ngày (UTC, 00:00)
+            <InputDate TValue="DateOnly?" @bind-Value="FromDay" class="form-control" />
+        </label>
+        <label>Đến ngày (UTC, cuối ngày)
+            <InputDate TValue="DateOnly?" @bind-Value="ToDay" class="form-control" />
+        </label>
+    </div>
+    <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+        <button class="btn primary" @onclick="SearchAsync">Tìm kiếm</button>
+        <button class="btn secondary" @onclick="ExportCsvAsync">Xuất CSV (tối đa 1000 dòng)</button>
+    </div>
+</section>
+
+@if (Busy)
+{
+    <p class="tiny">Đang tải...</p>
+}
+else if (!string.IsNullOrWhiteSpace(Error))
+{
+    <p class="error-banner">@Error</p>
+}
+
+<section class="card">
+    <h2 style="margin-bottom: 12px;">Kết quả</h2>
+    <div class="table-wrap">
+        <table class="simple-table">
+            <thead>
+                <tr>
+                    <th>Thời điểm (UTC)</th>
+                    <th>UserId</th>
+                    <th>Hành động</th>
+                    <th>Entity</th>
+                    <th>EntityId</th>
+                    <th>IP</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (Items.Count == 0)
+                {
+                    <tr><td colspan="6">Không có bản ghi.</td></tr>
+                }
+                else
+                {
+                    @foreach (var r in Items)
+                    {
+                        <tr>
+                            <td>@r.OccurredAtUtc.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                            <td class="tiny">@r.UserId</td>
+                            <td>@r.Action</td>
+                            <td>@r.EntityType</td>
+                            <td class="tiny">@r.EntityId</td>
+                            <td class="tiny">@r.IpAddress</td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+    <div class="pager">
+        <button class="btn secondary" disabled="@(SearchParams.Page <= 1)" @onclick="PrevPage">Trước</button>
+        <span>Trang @SearchParams.Page / @TotalPages</span>
+        <button class="btn secondary" disabled="@(SearchParams.Page >= TotalPages)" @onclick="NextPage">Sau</button>
+    </div>
+</section>
+
+@code {
+    private AuditLogSearchParams SearchParams { get; set; } = new();
+    private string UserIdText { get; set; } = string.Empty;
+    private DateOnly? FromDay { get; set; }
+    private DateOnly? ToDay { get; set; }
+    private IReadOnlyList<AuditLogDto> Items { get; set; } = Array.Empty<AuditLogDto>();
+    private string Error { get; set; } = string.Empty;
+    private bool Busy { get; set; }
+    private int TotalPages { get; set; } = 1;
+
+    protected override async Task OnInitializedAsync() => await SearchAsync();
+
+    private void ApplyDateFiltersToParams()
+    {
+        SearchParams.FromUtc = FromDay.HasValue
+            ? DateTime.SpecifyKind(FromDay.Value.ToDateTime(TimeOnly.MinValue), DateTimeKind.Utc)
+            : null;
+        SearchParams.ToUtc = ToDay.HasValue
+            ? DateTime.SpecifyKind(ToDay.Value.ToDateTime(new TimeOnly(23, 59, 59)), DateTimeKind.Utc)
+            : null;
+    }
+
+    private async Task SearchAsync()
+    {
+        Busy = true;
+        Error = string.Empty;
+        ApplyDateFiltersToParams();
+        if (Guid.TryParse(UserIdText.Trim(), out var uid))
+            SearchParams.UserId = uid;
+        else
+            SearchParams.UserId = null;
+
+        var (items, pagination, error) = await ComplianceApi.SearchAuditLogsAsync(SearchParams);
+        Busy = false;
+        Items = items;
+        Error = error ?? string.Empty;
+        TotalPages = pagination?.TotalPages is > 0 ? pagination.TotalPages : 1;
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        ApplyDateFiltersToParams();
+        if (Guid.TryParse(UserIdText.Trim(), out var uid))
+            SearchParams.UserId = uid;
+        else
+            SearchParams.UserId = null;
+
+        var (bytes, error) = await ComplianceApi.ExportAuditCsvAsync(SearchParams);
+        if (error is not null)
+        {
+            Error = error;
+            return;
+        }
+
+        await JS.InvokeVoidAsync(
+            "isoDownloadFile",
+            "audit-log.csv",
+            "text/csv;charset=utf-8",
+            Convert.ToBase64String(bytes!));
+    }
+
+    private async Task PrevPage()
+    {
+        if (SearchParams.Page > 1)
+        {
+            SearchParams.Page--;
+            await SearchAsync();
+        }
+    }
+
+    private async Task NextPage()
+    {
+        if (SearchParams.Page < TotalPages)
+        {
+            SearchParams.Page++;
+            await SearchAsync();
+        }
+    }
+}

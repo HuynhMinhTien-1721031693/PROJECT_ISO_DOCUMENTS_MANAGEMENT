@@ -1,0 +1,352 @@
+@page "/admin/users"
+@attribute [Authorize(Roles = "SystemAdmin")]
+@using System.Security.Claims
+@inject AdminUsersApiService AdminUsersApi
+@inject AuthenticationStateProvider AuthState
+@inject IJSRuntime JS
+
+<h1>Quản lý người dùng</h1>
+<p class="muted">Tài khoản đăng nhập <strong>admin@local</strong> (SystemAdmin) có thể tạo, khóa, mở khóa, xóa người dùng và gán vai trò.</p>
+
+@if (!string.IsNullOrWhiteSpace(Banner))
+{
+    <p class="error-banner">@Banner</p>
+}
+
+<section class="card" style="margin-top: 16px;">
+    <h2 style="margin-top:0;">Tạo tài khoản</h2>
+    <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end;">
+        <div class="field" style="min-width:220px; flex:1;">
+            <label>Email</label>
+            <input @bind="NewEmail" @bind:event="oninput" autocomplete="off" />
+        </div>
+        <div class="field" style="min-width:180px; flex:1;">
+            <label>Mật khẩu</label>
+            <input type="password" @bind="NewPassword" @bind:event="oninput" autocomplete="new-password" />
+        </div>
+        <div class="field" style="min-width:160px; flex:1;">
+            <label>Tên hiển thị</label>
+            <input @bind="NewDisplayName" @bind:event="oninput" />
+        </div>
+        <div class="field" style="min-width:200px; flex:1;">
+            <label>Phòng ban (Guid, tùy chọn)</label>
+            <input @bind="NewDepartmentIdText" @bind:event="oninput" placeholder="00000000-0000-0000-0000-000000000000" />
+        </div>
+    </div>
+    <p class="tiny" style="margin:8px 0 0;">Mật khẩu: tối thiểu 8 ký tự, có hoa, thường, số và ký tự đặc biệt.</p>
+    <div class="role-grid" style="margin-top:12px;">
+        @foreach (var role in AllRoles)
+        {
+            <label class="role-check">
+                <input type="checkbox" checked="@NewUserRoles.Contains(role)" @onchange="e => ToggleNewUserRole(role, e.Value is true)" />
+                @role
+            </label>
+        }
+    </div>
+    <div style="margin-top:12px;">
+        <button class="btn" disabled="@CreateBusy" @onclick="CreateUserAsync">@(CreateBusy ? "Đang tạo…" : "Tạo tài khoản")</button>
+    </div>
+    @if (!string.IsNullOrWhiteSpace(CreateError))
+    {
+        <p class="error-banner" style="margin-top:8px;">@CreateError</p>
+    }
+</section>
+
+<section class="card" style="margin-top: 16px;">
+    <div style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-bottom:16px;">
+        <div class="field" style="flex:1; min-width:200px;">
+            <label>Tìm email / tên</label>
+            <input @bind="Search" @bind:event="oninput" />
+        </div>
+        <button class="btn" @onclick="ReloadAsync">Tìm</button>
+    </div>
+
+    @if (Busy)
+    {
+        <p>Đang tải…</p>
+    }
+    else if (Users.Count == 0)
+    {
+        <p class="muted">Không có người dùng.</p>
+    }
+    else
+    {
+        <table class="simple-table">
+            <thead>
+                <tr>
+                    <th>Email</th>
+                    <th>Tên hiển thị</th>
+                    <th>Phòng ban</th>
+                    <th>Trạng thái khóa</th>
+                    <th>Vai trò</th>
+                    <th>Thao tác</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var u in Users)
+                {
+                    var isSelf = CurrentUserId is { } cid && cid == u.Id;
+                    <tr>
+                        <td>@u.Email</td>
+                        <td>@(u.DisplayName ?? "—")</td>
+                        <td>@(u.DepartmentId?.ToString() ?? "—")</td>
+                        <td>@(u.LockedOut ? "Đang khóa" : "Hoạt động")</td>
+                        <td><span class="tiny">@string.Join(", ", u.Roles)</span></td>
+                        <td>
+                            <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                                <button class="btn-outline" @onclick="() => StartEditRoles(u)">Gán role</button>
+                                <button class="btn-outline" disabled="@(u.LockedOut || isSelf)" title="@(isSelf ? "Không thể khóa chính mình" : null)" @onclick="() => LockAsync(u)">Khóa</button>
+                                <button class="btn-outline" disabled="@(!u.LockedOut)" @onclick="() => UnlockAsync(u)">Mở khóa</button>
+                                <button class="btn danger" disabled="@isSelf" title="@(isSelf ? "Không thể xóa chính mình" : null)" @onclick="() => DeleteAsync(u)">Xóa</button>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        @if (Pagination is not null)
+        {
+            <div class="tiny" style="margin-top:12px;">
+                Trang @Pagination.Page / @Pagination.TotalPages (@Pagination.TotalCount người dùng)
+            </div>
+            <div style="margin-top:8px; display:flex; gap:8px;">
+                <button class="btn-outline" disabled="@(Pagination.Page <= 1)" @onclick="PrevPage">Trước</button>
+                <button class="btn-outline" disabled="@(!Pagination.HasNext)" @onclick="NextPage">Sau</button>
+            </div>
+        }
+    }
+</section>
+
+@if (EditingUser is not null)
+{
+    <section class="card" style="margin-top: 16px;">
+        <h2>Gán vai trò — @EditingUser.Email</h2>
+        <div class="role-grid">
+            @foreach (var role in AllRoles)
+            {
+                <label class="role-check">
+                    <input type="checkbox" checked="@SelectedRoles.Contains(role)" @onchange="e => ToggleRole(role, e.Value is true)" />
+                    @role
+                </label>
+            }
+        </div>
+        <div style="margin-top:12px; display:flex; gap:8px;">
+            <button class="btn" disabled="@RoleSaveBusy" @onclick="SaveRolesAsync">@(RoleSaveBusy ? "Đang lưu…" : "Lưu")</button>
+            <button class="btn-outline" @onclick="CancelEdit">Hủy</button>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(RoleError))
+        {
+            <p class="error-banner" style="margin-top:8px;">@RoleError</p>
+        }
+    </section>
+}
+
+@code {
+    private static readonly string[] AllRoles =
+    {
+        "SystemAdmin", "ISOManager", "DocumentController", "QAOfficer", "SafetyOfficer", "ISMSOfficer"
+    };
+
+    private string Banner { get; set; } = string.Empty;
+    private string Search { get; set; } = string.Empty;
+    private bool Busy { get; set; } = true;
+    private bool RoleSaveBusy { get; set; }
+    private bool CreateBusy { get; set; }
+    private string RoleError { get; set; } = string.Empty;
+    private string CreateError { get; set; } = string.Empty;
+    private int Page { get; set; } = 1;
+    private PaginationMeta? Pagination { get; set; }
+    private List<UserListItemDto> Users { get; } = new();
+    private UserListItemDto? EditingUser { get; set; }
+    private HashSet<string> SelectedRoles { get; } = new(StringComparer.OrdinalIgnoreCase);
+    private Guid? CurrentUserId { get; set; }
+
+    private string NewEmail { get; set; } = string.Empty;
+    private string NewPassword { get; set; } = string.Empty;
+    private string NewDisplayName { get; set; } = string.Empty;
+    private string NewDepartmentIdText { get; set; } = string.Empty;
+    private HashSet<string> NewUserRoles { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        var id = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (Guid.TryParse(id, out var g))
+            CurrentUserId = g;
+
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        Busy = true;
+        Banner = string.Empty;
+        var (items, pagination, error) = await AdminUsersApi.ListAsync(Page, 20, string.IsNullOrWhiteSpace(Search) ? null : Search.Trim());
+        Busy = false;
+        if (error is not null)
+        {
+            Banner = error.Contains("503", StringComparison.OrdinalIgnoreCase) || error.Contains("unavailable", StringComparison.OrdinalIgnoreCase)
+                ? "API quản trị người dùng cần SQL Server (không chạy ở chế độ in-memory)."
+                : error;
+            Users.Clear();
+            Pagination = null;
+            return;
+        }
+
+        Users.Clear();
+        Users.AddRange(items);
+        Pagination = pagination;
+    }
+
+    private async Task PrevPage()
+    {
+        if (Page <= 1) return;
+        Page--;
+        await ReloadAsync();
+    }
+
+    private async Task NextPage()
+    {
+        if (Pagination is null || !Pagination.HasNext) return;
+        Page++;
+        await ReloadAsync();
+    }
+
+    private void ToggleNewUserRole(string role, bool on)
+    {
+        if (on)
+            NewUserRoles.Add(role);
+        else
+            NewUserRoles.Remove(role);
+    }
+
+    private async Task CreateUserAsync()
+    {
+        CreateError = string.Empty;
+        if (string.IsNullOrWhiteSpace(NewEmail) || string.IsNullOrWhiteSpace(NewPassword))
+        {
+            CreateError = "Nhập email và mật khẩu.";
+            return;
+        }
+
+        Guid? dept = null;
+        if (!string.IsNullOrWhiteSpace(NewDepartmentIdText))
+        {
+            if (!Guid.TryParse(NewDepartmentIdText.Trim(), out var d))
+            {
+                CreateError = "Phòng ban không phải Guid hợp lệ.";
+                return;
+            }
+
+            dept = d;
+        }
+
+        CreateBusy = true;
+        var (created, err) = await AdminUsersApi.CreateAsync(
+            NewEmail.Trim(),
+            NewPassword,
+            string.IsNullOrWhiteSpace(NewDisplayName) ? null : NewDisplayName.Trim(),
+            dept,
+            NewUserRoles.ToList());
+        CreateBusy = false;
+
+        if (created is null)
+        {
+            CreateError = string.IsNullOrWhiteSpace(err) ? "Tạo tài khoản thất bại." : err;
+            return;
+        }
+
+        NewEmail = string.Empty;
+        NewPassword = string.Empty;
+        NewDisplayName = string.Empty;
+        NewDepartmentIdText = string.Empty;
+        NewUserRoles.Clear();
+        Page = 1;
+        await ReloadAsync();
+    }
+
+    private async Task LockAsync(UserListItemDto u)
+    {
+        Banner = string.Empty;
+        var (ok, err) = await AdminUsersApi.LockAsync(u.Id);
+        if (!ok)
+        {
+            Banner = err ?? "Khóa tài khoản thất bại.";
+            return;
+        }
+
+        await ReloadAsync();
+    }
+
+    private async Task UnlockAsync(UserListItemDto u)
+    {
+        Banner = string.Empty;
+        var (ok, err) = await AdminUsersApi.UnlockAsync(u.Id);
+        if (!ok)
+        {
+            Banner = err ?? "Mở khóa thất bại.";
+            return;
+        }
+
+        await ReloadAsync();
+    }
+
+    private async Task DeleteAsync(UserListItemDto u)
+    {
+        var okJs = await JS.InvokeAsync<bool>("confirm", $"Xóa vĩnh viễn tài khoản {u.Email}?");
+        if (!okJs)
+            return;
+
+        Banner = string.Empty;
+        var (ok, err) = await AdminUsersApi.DeleteAsync(u.Id);
+        if (!ok)
+        {
+            Banner = err ?? "Xóa thất bại.";
+            return;
+        }
+
+        await ReloadAsync();
+    }
+
+    private void StartEditRoles(UserListItemDto u)
+    {
+        EditingUser = u;
+        RoleError = string.Empty;
+        SelectedRoles.Clear();
+        foreach (var r in u.Roles)
+            SelectedRoles.Add(r);
+    }
+
+    private void CancelEdit()
+    {
+        EditingUser = null;
+        RoleError = string.Empty;
+    }
+
+    private void ToggleRole(string role, bool on)
+    {
+        if (on)
+            SelectedRoles.Add(role);
+        else
+            SelectedRoles.Remove(role);
+    }
+
+    private async Task SaveRolesAsync()
+    {
+        if (EditingUser is null)
+            return;
+        RoleSaveBusy = true;
+        RoleError = string.Empty;
+        var (ok, err) = await AdminUsersApi.SetRolesAsync(EditingUser.Id, SelectedRoles.ToList());
+        RoleSaveBusy = false;
+        if (!ok)
+        {
+            RoleError = err ?? "Lưu thất bại.";
+            return;
+        }
+
+        CancelEdit();
+        await ReloadAsync();
+    }
+}

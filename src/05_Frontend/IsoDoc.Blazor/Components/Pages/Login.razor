@@ -6,19 +6,19 @@
 
 <div class="login-wrap">
     <div class="card login-card">
-        <h1>ISO DMS Login</h1>
-        <p class="muted">Đăng nhập bằng tài khoản demo để sử dụng hệ thống.</p>
+        <h1>Đăng nhập ISO DMS</h1>
+        <p class="muted">Đăng nhập để sử dụng hệ thống quản lý tài liệu ISO.</p>
         <p class="muted" style="font-size: 0.9rem;">
-            Demo: <strong>admin@local</strong> / <strong>Admin@123</strong>
-            — mật khẩu đúng <strong>9 ký tự</strong> (chữ <strong>A</strong> hoa, ký tự <strong>@@</strong>, số <strong>123</strong> đủ cả số 3 cuối).
+            Tài khoản mẫu: <strong>admin@local</strong> / <strong>Admin@123</strong>
         </p>
+        <p class="tiny" style="margin-top: -4px;">Nếu đăng nhập không được, kiểm tra gõ đúng chữ hoa/chữ thường của mật khẩu.</p>
 
         <div class="field">
             <label for="login-email">Email</label>
             <input id="login-email" type="text" inputmode="email" autocomplete="username" @bind="Email" />
         </div>
         <div class="field">
-            <label for="login-password">Password</label>
+            <label for="login-password">Mật khẩu</label>
             <input id="login-password" type="password" autocomplete="current-password" @bind="Password" />
         </div>
 
@@ -28,7 +28,7 @@
         }
 
         <button class="btn" disabled="@Busy" @onclick="HandleLoginAsync">
-            @(Busy ? "Signing in..." : "Sign in")
+            @(Busy ? "Đang đăng nhập..." : "Đăng nhập")
         </button>
     </div>
 </div>

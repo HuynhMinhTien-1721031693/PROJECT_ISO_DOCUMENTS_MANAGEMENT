@@ -1,0 +1,21 @@
+# ISO Document Management — Blazor Server (.NET 8)
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+COPY IsoDocumentManagement.sln ./
+COPY src/ ./src/
+
+RUN dotnet restore src/05_Frontend/IsoDoc.Blazor/IsoDoc.Blazor.csproj
+RUN dotnet publish src/05_Frontend/IsoDoc.Blazor/IsoDoc.Blazor.csproj \
+    -c Release \
+    -o /app/publish \
+    --no-restore \
+    /p:UseAppHost=false
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
+WORKDIR /app
+COPY --from=build /app/publish .
+ENV ASPNETCORE_URLS=http://+:8080
+ENV ASPNETCORE_ENVIRONMENT=Docker
+EXPOSE 8080
+ENTRYPOINT ["dotnet", "IsoDoc.Blazor.dll"]

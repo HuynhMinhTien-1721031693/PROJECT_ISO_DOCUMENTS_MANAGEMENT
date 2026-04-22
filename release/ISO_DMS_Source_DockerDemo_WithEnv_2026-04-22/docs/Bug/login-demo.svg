@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420" viewBox="0 0 720 420">
+  <rect width="720" height="420" fill="#1e1e2e"/>
+  <rect x="180" y="60" width="360" height="300" rx="12" fill="#313244" stroke="#89b4fa" stroke-width="2"/>
+  <text x="360" y="110" text-anchor="middle" fill="#cdd6f4" font-family="Segoe UI,sans-serif" font-size="20" font-weight="600">ISO DMS  ng nh�p</text>
+  <rect x="220" y="150" width="280" height="36" rx="6" fill="#45475a"/>
+  <text x="230" y="173" fill="#a6adc8" font-family="Segoe UI,sans-serif" font-size="13">Email</text>
+  <rect x="220" y="210" width="280" height="36" rx="6" fill="#45475a"/>
+  <text x="230" y="233" fill="#a6adc8" font-family="Segoe UI,sans-serif" font-size="13">M�t kh�u</text>
+  <rect x="220" y="280" width="280" height="40" rx="8" fill="#89b4fa"/>
+  <text x="360" y="306" text-anchor="middle" fill="#1e1e2e" font-family="Segoe UI,sans-serif" font-size="14" font-weight="600">ng nh�p</text>
+  <text x="360" y="380" text-anchor="middle" fill="#6c7086" font-family="Segoe UI,sans-serif" font-size="11">Wireframe minh h�a  thay b�ng �nh ch�p th�t n�u c�n</text>
+</svg>

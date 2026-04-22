@@ -1,0 +1,1437 @@
+
+
+
+ISO DMS V3
+Phần 3: Infrastructure Layer
+EF Core 8 · Azure Blob · Elasticsearch · Redis · JWT · Notifications
+10 Source Files	Implements all Domain ports	SQL Server + Azure	Redis + Elasticsearch
+ 
+
+
+ 
+1. Tổng quan Infrastructure Layer
+Infrastructure Layer là tầng ngoài cùng của Clean Architecture. Đây là nơi duy nhất biết đến các thư viện cụ thể như EF Core, Azure SDK, NEST (Elasticsearch), StackExchange.Redis. Tất cả implement các interfaces đã định nghĩa trong Domain.
+
+Cấu trúc thư mục:
+IsoDoc.Infrastructure/
+├── Persistence/
+│   ├── AppDbContext.cs               ← EF Core DbContext + domain event dispatch
+│   ├── AuditService.cs               ← IAuditService implementation
+│   ├── Configurations/
+│   │   └── EntityConfigurations.cs   ← IEntityTypeConfiguration cho mỗi entity
+│   └── Repositories/
+│       └── Repositories.cs           ← DocumentRepository, WorkflowRepository
+├── Storage/
+│   └── AzureBlobStorageService.cs    ← IFileStorageService via Azure SDK
+├── Search/
+│   └── ElasticsearchService.cs       ← ISearchService via NEST v8
+├── Cache/
+│   └── RedisCacheService.cs          ← IRedisCacheService + NotificationService
+├── Identity/
+│   └── JwtAndIdentityServices.cs     ← JwtTokenService, CurrentUserService, PermissionService
+├── DependencyInjection.cs            ← AddInfrastructureServices()
+└── appsettings.template.json         ← Template cấu hình tất cả services
+ 
+2. Persistence — EF Core 8
+2.1  AppDbContext
+AppDbContext xử lý 3 trách nhiệm: lưu entities, tự động cập nhật audit fields (CreatedAt/UpdatedAt), và dispatch domain events SAU KHI commit thành công.
+
+Domain events được dispatch sau SaveChanges — không trong transaction. Nếu handler fail, document vẫn được lưu. Dùng Outbox Pattern nếu cần đảm bảo at-least-once delivery.
+
+using IsoDoc.Domain.Common;
+using IsoDoc.Domain.Entities;
+using MediatR;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using System.Reflection;
+
+namespace IsoDoc.Infrastructure.Persistence;
+
+/// <summary>
+/// Main EF Core DbContext for the application.
+///
+/// Design decisions:
+/// - Uses IEntityTypeConfiguration per entity (kept in Configurations/ folder)
+/// - Soft delete filter applied globally via HasQueryFilter
+/// - Domain events dispatched AFTER SaveChanges via DomainEventDispatcherInterceptor
+/// - UTC datetime convention enforced via model building convention
+/// </summary>
+public sealed class AppDbContext : DbContext
+{
+    private readonly IMediator _mediator;
+
+    public AppDbContext(DbContextOptions<AppDbContext> options, IMediator mediator)
+        : base(options)
+    {
+        _mediator = mediator;
+    }
+
+    // ── DbSets ───────────────────────────────────────────────────────────
+    public DbSet<Document>          Documents         { get; set; } = null!;
+    public DbSet<DocumentVersion>   DocumentVersions  { get; set; } = null!;
+    public DbSet<ApprovalWorkflow>  ApprovalWorkflows { get; set; } = null!;
+    public DbSet<ApprovalStep>      ApprovalSteps     { get; set; } = null!;
+    public DbSet<AuditLog>          AuditLogs         { get; set; } = null!;
+
+    // ── Model configuration ───────────────────────────────────────────────
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        // Scan and apply all IEntityTypeConfiguration<T> in this assembly
+        modelBuilder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
+
+        // Global soft-delete filter: IsDeleted queries excluded automatically
+        modelBuilder.Entity<Document>()
+            .HasQueryFilter(d => !d.IsDeleted);
+
+        // UTC convention: store all DateTimes as UTC in SQL Server
+        foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+        {
+            foreach (var property in entityType.GetProperties()
+                .Where(p => p.ClrType == typeof(DateTime) || p.ClrType == typeof(DateTime?)))
+            {
+                property.SetValueConverter(
+                    new Microsoft.EntityFrameworkCore.Storage.ValueConversion.ValueConverter<DateTime, DateTime>(
+                        v => v.Kind == DateTimeKind.Utc ? v : v.ToUniversalTime(),
+                        v => DateTime.SpecifyKind(v, DateTimeKind.Utc)));
+            }
+        }
+
+        base.OnModelCreating(modelBuilder);
+    }
+
+    // ── SaveChanges with audit + domain events ────────────────────────────
+    public override async Task<int> SaveChangesAsync(CancellationToken ct = default)
+    {
+        // 1. Auto-update audit fields on tracked entities
+        foreach (var entry in ChangeTracker.Entries<BaseAuditableEntity>())
+        {
+            switch (entry.State)
+            {
+                case EntityState.Added:
+                    entry.Entity.CreatedAt = DateTime.UtcNow;
+                    entry.Entity.UpdatedAt = DateTime.UtcNow;
+                    break;
+                case EntityState.Modified:
+                    entry.Entity.UpdatedAt = DateTime.UtcNow;
+                    break;
+            }
+        }
+
+        // 2. Collect domain events before saving
+        var entitiesWithEvents = ChangeTracker.Entries<BaseEntity>()
+            .Select(e => e.Entity)
+            .Where(e => e.DomainEvents.Any())
+            .ToList();
+
+        var domainEvents = entitiesWithEvents
+            .SelectMany(e => e.DomainEvents)
+            .ToList();
+
+        // 3. Clear events before saving (avoid double dispatch on retry)
+        entitiesWithEvents.ForEach(e => e.ClearDomainEvents());
+
+        // 4. Commit to database
+        var result = await base.SaveChangesAsync(ct);
+
+        // 5. Dispatch domain events AFTER commit
+        foreach (var domainEvent in domainEvents)
+            await _mediator.Publish(domainEvent, ct);
+
+        return result;
+    }
+}
+
+// ── AuditLog entity (infrastructure-only, not in Domain) ─────────────────────
+public sealed class AuditLog
+{
+    public Guid      Id          { get; set; } = Guid.NewGuid();
+    public Guid?     UserId      { get; set; }
+    public string    Action      { get; set; } = string.Empty;
+    public string?   EntityType  { get; set; }
+    public string?   EntityId    { get; set; }
+    public string?   OldValues   { get; set; }   // JSON
+    public string?   NewValues   { get; set; }   // JSON
+    public string?   IpAddress   { get; set; }
+    public string?   UserAgent   { get; set; }
+    public DateTime  OccurredAt  { get; set; } = DateTime.UtcNow;
+}
+
+
+2.2  Entity Type Configurations
+Mỗi entity có một IEntityTypeConfiguration riêng. Value Objects (DocumentCode, VersionNumber, FileChecksum) được map qua HasConversion — DB lưu primitive type (NVARCHAR), C# đọc về là Value Object.
+
+Tags lưu dạng JSON array string trong một cột NVARCHAR(4000). Không dùng bảng riêng vì tags chỉ dùng để filter/search, không cần relationship.
+
+using IsoDoc.Domain.Entities;
+using IsoDoc.Domain.Enums;
+using IsoDoc.Domain.ValueObjects;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+
+namespace IsoDoc.Infrastructure.Persistence.Configurations;
+
+/// <summary>
+/// EF Core mapping for Document aggregate root.
+/// Value objects (DocumentCode, VersionNumber) mapped via owned entity / value converter.
+/// </summary>
+public sealed class DocumentConfiguration : IEntityTypeConfiguration<Document>
+{
+    public void Configure(EntityTypeBuilder<Document> builder)
+    {
+        builder.ToTable("Documents");
+
+        builder.HasKey(d => d.Id);
+
+        builder.Property(d => d.Title)
+            .HasMaxLength(500)
+            .IsRequired();
+
+        // DocumentCode value object → stored as NVARCHAR(50)
+        builder.Property(d => d.Code)
+            .HasColumnName("DocumentCode")
+            .HasMaxLength(50)
+            .IsRequired()
+            .HasConversion(
+                code => code.Value,
+                value => DocumentCode.Create(value));
+
+        builder.HasIndex(d => d.Code)
+            .IsUnique()
+            .HasDatabaseName("IX_Documents_Code_Unique");
+
+        // VersionNumber value object → stored as NVARCHAR(20)
+        builder.Property(d => d.CurrentVersion)
+            .HasColumnName("CurrentVersion")
+            .HasMaxLength(20)
+            .IsRequired()
+            .HasConversion(
+                v => v.ToString(),
+                s => VersionNumber.Create(s));
+
+        // Enums → stored as INT (not string) for performance
+        builder.Property(d => d.Standard)
+            .HasConversion<int>()
+            .IsRequired();
+
+        builder.Property(d => d.Category)
+            .HasConversion<int>()
+            .IsRequired();
+
+        builder.Property(d => d.Status)
+            .HasConversion<int>()
+            .IsRequired();
+
+        // Tags → stored as JSON array string
+        builder.Property(d => d.Tags)
+            .HasColumnName("Tags")
+            .HasMaxLength(4000)
+            .HasConversion(
+                tags => System.Text.Json.JsonSerializer.Serialize(tags, (System.Text.Json.JsonSerializerOptions?)null),
+                json => (IReadOnlyList<string>)(string.IsNullOrEmpty(json)
+                    ? new List<string>()
+                    : System.Text.Json.JsonSerializer.Deserialize<List<string>>(json, (System.Text.Json.JsonSerializerOptions?)null)
+                      ?? new List<string>()));
+
+        builder.Property(d => d.Description).HasMaxLength(2000);
+        builder.Property(d => d.OwnerId).IsRequired();
+        builder.Property(d => d.DepartmentId).IsRequired();
+        builder.Property(d => d.IsDeleted).HasDefaultValue(false);
+
+        // One-to-many: Document → DocumentVersions
+        builder.HasMany(d => d.Versions)
+            .WithOne()
+            .HasForeignKey(v => v.DocumentId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Covering indexes for common query patterns
+        builder.HasIndex(d => new { d.Status, d.Standard })
+            .HasDatabaseName("IX_Documents_Status_Standard")
+            .IncludeProperties(d => new { d.Title, d.Code });
+
+        builder.HasIndex(d => d.OwnerId)
+            .HasDatabaseName("IX_Documents_OwnerId");
+
+        builder.HasIndex(d => d.UpdatedAt)
+            .HasDatabaseName("IX_Documents_UpdatedAt");
+    }
+}
+
+public sealed class DocumentVersionConfiguration : IEntityTypeConfiguration<DocumentVersion>
+{
+    public void Configure(EntityTypeBuilder<DocumentVersion> builder)
+    {
+        builder.ToTable("DocumentVersions");
+        builder.HasKey(v => v.Id);
+
+        builder.Property(v => v.BlobPath).HasMaxLength(1000).IsRequired();
+        builder.Property(v => v.FileSize).IsRequired();
+        builder.Property(v => v.ChangeNote).HasMaxLength(2000);
+
+        builder.Property(v => v.FileType)
+            .HasConversion<int>()
+            .IsRequired();
+
+        // FileChecksum value object → stored as NCHAR(64)
+        builder.Property(v => v.Checksum)
+            .HasColumnName("Checksum")
+            .HasMaxLength(64)
+            .IsRequired()
+            .HasConversion(
+                c => c.Value,
+                s => FileChecksum.FromHexString(s));
+
+        builder.HasIndex(v => new { v.DocumentId, v.UploadedAt })
+            .HasDatabaseName("IX_DocumentVersions_Document_Date");
+
+        builder.HasIndex(v => new { v.DocumentId, v.IsCurrentVersion })
+            .HasDatabaseName("IX_DocumentVersions_Current");
+    }
+}
+
+public sealed class ApprovalWorkflowConfiguration : IEntityTypeConfiguration<ApprovalWorkflow>
+{
+    public void Configure(EntityTypeBuilder<ApprovalWorkflow> builder)
+    {
+        builder.ToTable("ApprovalWorkflows");
+        builder.HasKey(w => w.Id);
+
+        builder.Property(w => w.Status)
+            .HasConversion<int>()
+            .IsRequired();
+
+        builder.HasMany(w => w.Steps)
+            .WithOne()
+            .HasForeignKey(s => s.WorkflowId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasIndex(w => w.DocumentId)
+            .HasDatabaseName("IX_Workflows_DocumentId");
+    }
+}
+
+public sealed class ApprovalStepConfiguration : IEntityTypeConfiguration<ApprovalStep>
+{
+    public void Configure(EntityTypeBuilder<ApprovalStep> builder)
+    {
+        builder.ToTable("ApprovalSteps");
+        builder.HasKey(s => s.Id);
+
+        builder.Property(s => s.Decision)
+            .HasConversion<int>()
+            .IsRequired();
+
+        builder.Property(s => s.Comment).HasMaxLength(2000);
+
+        builder.HasIndex(s => new { s.WorkflowId, s.StepOrder })
+            .HasDatabaseName("IX_ApprovalSteps_Workflow_Order");
+
+        builder.HasIndex(s => s.ApproverId)
+            .HasDatabaseName("IX_ApprovalSteps_ApproverId");
+    }
+}
+
+public sealed class AuditLogConfiguration : IEntityTypeConfiguration<AuditLog>
+{
+    public void Configure(EntityTypeBuilder<AuditLog> builder)
+    {
+        builder.ToTable("AuditLogs");
+        builder.HasKey(a => a.Id);
+
+        builder.Property(a => a.Action).HasMaxLength(100).IsRequired();
+        builder.Property(a => a.EntityType).HasMaxLength(100);
+        builder.Property(a => a.EntityId).HasMaxLength(200);
+        builder.Property(a => a.OldValues).HasColumnType("nvarchar(max)");
+        builder.Property(a => a.NewValues).HasColumnType("nvarchar(max)");
+        builder.Property(a => a.IpAddress).HasMaxLength(45);
+        builder.Property(a => a.UserAgent).HasMaxLength(500);
+
+        // AuditLogs are append-only — no update/delete allowed
+        // Enforced at DB level via trigger or SQL Server Ledger (see migration)
+        builder.HasIndex(a => a.OccurredAt)
+            .HasDatabaseName("IX_AuditLogs_OccurredAt");
+
+        builder.HasIndex(a => new { a.UserId, a.OccurredAt })
+            .HasDatabaseName("IX_AuditLogs_User_Date");
+    }
+}
+
+
+2.3  Repositories
+Repository pattern đảm bảo Application layer không biết EF Core tồn tại. GetPendingForApproverAsync dùng expression filter phức hợp — EF Core translate sang SQL hiệu quả.
+
+using IsoDoc.Domain.Entities;
+using IsoDoc.Domain.Enums;
+using IsoDoc.Domain.Interfaces;
+using Microsoft.EntityFrameworkCore;
+
+namespace IsoDoc.Infrastructure.Persistence.Repositories;
+
+/// <summary>
+/// EF Core implementation of IDocumentRepository.
+/// Uses eager loading for Versions when needed.
+/// Global soft-delete filter applied automatically by EF (see AppDbContext).
+/// </summary>
+public sealed class DocumentRepository : IDocumentRepository
+{
+    private readonly AppDbContext _db;
+
+    public DocumentRepository(AppDbContext db) => _db = db;
+
+    public async Task<Document?> GetByIdAsync(Guid id, CancellationToken ct = default)
+        => await _db.Documents
+            .Include(d => d.Versions)
+            .FirstOrDefaultAsync(d => d.Id == id, ct);
+
+    public async Task<Document?> GetByCodeAsync(string code, CancellationToken ct = default)
+        => await _db.Documents
+            .Include(d => d.Versions)
+            .FirstOrDefaultAsync(d => d.Code.Value == code, ct);
+
+    public async Task<bool> ExistsAsync(string code, CancellationToken ct = default)
+        => await _db.Documents
+            .AnyAsync(d => d.Code.Value == code, ct);
+
+    public async Task<IReadOnlyList<Document>> GetByStatusAsync(
+        DocumentStatus status, CancellationToken ct = default)
+        => await _db.Documents
+            .Where(d => d.Status == status)
+            .OrderByDescending(d => d.UpdatedAt)
+            .ToListAsync(ct);
+
+    public async Task<IReadOnlyList<Document>> GetByOwnerAsync(
+        Guid ownerId, CancellationToken ct = default)
+        => await _db.Documents
+            .Where(d => d.OwnerId == ownerId)
+            .OrderByDescending(d => d.UpdatedAt)
+            .ToListAsync(ct);
+
+    public async Task AddAsync(Document document, CancellationToken ct = default)
+        => await _db.Documents.AddAsync(document, ct);
+
+    public void Update(Document document)
+        => _db.Documents.Update(document);
+
+    public async Task<int> SaveChangesAsync(CancellationToken ct = default)
+        => await _db.SaveChangesAsync(ct);
+}
+
+/// <summary>
+/// EF Core implementation of IApprovalWorkflowRepository.
+/// Always includes Steps (needed to check approver + step order).
+/// </summary>
+public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
+{
+    private readonly AppDbContext _db;
+
+    public ApprovalWorkflowRepository(AppDbContext db) => _db = db;
+
+    public async Task<ApprovalWorkflow?> GetByDocumentIdAsync(
+        Guid documentId, CancellationToken ct = default)
+        => await _db.ApprovalWorkflows
+            .Include(w => w.Steps)
+            .FirstOrDefaultAsync(w => w.Id == documentId, ct);
+
+    public async Task<ApprovalWorkflow?> GetActiveWorkflowAsync(
+        Guid documentId, CancellationToken ct = default)
+        => await _db.ApprovalWorkflows
+            .Include(w => w.Steps)
+            .Where(w => w.DocumentId == documentId
+                     && w.Status == WorkflowStatus.InProgress)
+            .OrderByDescending(w => w.StartedAt)
+            .FirstOrDefaultAsync(ct);
+
+    public async Task<IReadOnlyList<ApprovalWorkflow>> GetPendingForApproverAsync(
+        Guid approverId, CancellationToken ct = default)
+        => await _db.ApprovalWorkflows
+            .Include(w => w.Steps)
+            .Where(w => w.Status == WorkflowStatus.InProgress
+                     && w.Steps.Any(s => s.ApproverId == approverId
+                                      && s.Decision == WorkflowDecision.Pending
+                                      && s.StepOrder == w.CurrentStepOrder))
+            .OrderBy(w => w.StartedAt)
+            .ToListAsync(ct);
+
+    public async Task AddAsync(ApprovalWorkflow workflow, CancellationToken ct = default)
+        => await _db.ApprovalWorkflows.AddAsync(workflow, ct);
+
+    public void Update(ApprovalWorkflow workflow)
+        => _db.ApprovalWorkflows.Update(workflow);
+}
+
+
+2.4  AuditService
+Mỗi action gọi LogAsync() ngay lập tức với SaveChanges riêng — không batch với main transaction. Đảm bảo audit log không bị mất ngay cả khi main operation rollback.
+
+using IsoDoc.Application.Common.Interfaces;
+using IsoDoc.Domain.Interfaces;
+using System.Text.Json;
+
+namespace IsoDoc.Infrastructure.Persistence;
+
+/// <summary>
+/// Writes immutable audit entries to AuditLogs table.
+/// Called from Application layer Handlers after every state-changing operation.
+///
+/// ISO 27001 requirement: all access and modifications must be traceable.
+/// AuditLogs table is configured as append-only — no UPDATE/DELETE permitted.
+/// </summary>
+public sealed class AuditService : IAuditService
+{
+    private readonly AppDbContext        _db;
+    private readonly ICurrentUserService _currentUser;
+
+    private static readonly JsonSerializerOptions _jsonOpts = new()
+    {
+        WriteIndented        = false,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    public AuditService(AppDbContext db, ICurrentUserService currentUser)
+    {
+        _db          = db;
+        _currentUser = currentUser;
+    }
+
+    public async Task LogAsync(
+        Guid?   userId,
+        string  action,
+        string  entityType,
+        string  entityId,
+        object? oldValues  = null,
+        object? newValues  = null,
+        string? ipAddress  = null,
+        CancellationToken ct = default)
+    {
+        var log = new AuditLog
+        {
+            UserId     = userId ?? _currentUser.UserId,
+            Action     = action,
+            EntityType = entityType,
+            EntityId   = entityId,
+            OldValues  = oldValues is not null
+                ? JsonSerializer.Serialize(oldValues, _jsonOpts) : null,
+            NewValues  = newValues is not null
+                ? JsonSerializer.Serialize(newValues, _jsonOpts) : null,
+            IpAddress  = ipAddress,
+            OccurredAt = DateTime.UtcNow
+        };
+
+        await _db.AuditLogs.AddAsync(log, ct);
+
+        // Save immediately — audit logs must not be lost even if main transaction fails
+        await _db.SaveChangesAsync(ct);
+    }
+}
+
+ 
+3. Storage — Azure Blob Service
+File vật lý không bao giờ lưu trong SQL Server. Chỉ lưu blobPath (storage key). Download thông qua SAS URL có thời hạn — client tải trực tiếp từ Azure, không qua API server.
+
+Thuộc tính	Giá trị
+Container	iso-documents (Private — no public access)
+Blob path format	{documentId}/{yyyyMMddTHHmmss}_{filename}
+Download method	SAS URL, default 1 hour expiry
+Max file size	50 MB (enforced ở Validator)
+Allowed types	PDF, DOCX, XLSX
+Metadata stored	documentId, originalName, uploadedAt
+
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
+using Azure.Storage.Sas;
+using IsoDoc.Domain.Interfaces;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace IsoDoc.Infrastructure.Storage;
+
+/// <summary>
+/// Azure Blob Storage implementation of IFileStorageService.
+///
+/// Storage layout:
+///   Container: iso-documents
+///   Blob path: {documentId}/{timestamp}_{sanitisedFileName}
+///   Example:   a1b2c3d4-.../20260325T143000_QMS-PR-001-v2.pdf
+///
+/// Security:
+/// - Container access: Private (no public access)
+/// - Download via short-lived SAS tokens (default 1 hour)
+/// - Blob metadata includes original filename, uploader, checksum
+/// </summary>
+public sealed class AzureBlobStorageService : IFileStorageService
+{
+    private readonly BlobServiceClient          _blobService;
+    private readonly BlobStorageOptions         _options;
+    private readonly ILogger<AzureBlobStorageService> _logger;
+
+    public AzureBlobStorageService(
+        BlobServiceClient                  blobService,
+        IOptions<BlobStorageOptions>       options,
+        ILogger<AzureBlobStorageService>   logger)
+    {
+        _blobService = blobService;
+        _options     = options.Value;
+        _logger      = logger;
+    }
+
+    public async Task<string> UploadAsync(
+        Stream   fileStream,
+        string   fileName,
+        string   contentType,
+        Guid     documentId,
+        CancellationToken ct = default)
+    {
+        var container = _blobService.GetBlobContainerClient(_options.ContainerName);
+
+        // Ensure container exists (idempotent)
+        await container.CreateIfNotExistsAsync(
+            PublicAccessType.None, cancellationToken: ct);
+
+        // Build deterministic blob path
+        var timestamp = DateTime.UtcNow.ToString("yyyyMMddTHHmmss");
+        var safeName  = SanitiseFileName(fileName);
+        var blobPath  = $"{documentId}/{timestamp}_{safeName}";
+
+        var blobClient = container.GetBlobClient(blobPath);
+
+        var uploadOptions = new BlobUploadOptions
+        {
+            HttpHeaders = new BlobHttpHeaders { ContentType = contentType },
+            Metadata    = new Dictionary<string, string>
+            {
+                ["documentId"]    = documentId.ToString(),
+                ["originalName"]  = fileName,
+                ["uploadedAt"]    = DateTime.UtcNow.ToString("O")
+            }
+        };
+
+        _logger.LogInformation(
+            "Uploading blob: {BlobPath} ({ContentType})", blobPath, contentType);
+
+        await blobClient.UploadAsync(fileStream, uploadOptions, ct);
+
+        return blobPath;
+    }
+
+    public async Task<string> GetSecureDownloadUrlAsync(
+        string   blobPath,
+        TimeSpan expiry,
+        CancellationToken ct = default)
+    {
+        var container  = _blobService.GetBlobContainerClient(_options.ContainerName);
+        var blobClient = container.GetBlobClient(blobPath);
+
+        // Generate SAS token with read-only permission
+        if (!blobClient.CanGenerateSasUri)
+            throw new InvalidOperationException(
+                "BlobClient cannot generate SAS URI. Ensure the storage account uses a StorageSharedKeyCredential.");
+
+        var sasBuilder = new BlobSasBuilder
+        {
+            BlobContainerName = _options.ContainerName,
+            BlobName          = blobPath,
+            Resource          = "b",
+            ExpiresOn         = DateTimeOffset.UtcNow.Add(expiry)
+        };
+        sasBuilder.SetPermissions(BlobSasPermissions.Read);
+
+        var sasUri = blobClient.GenerateSasUri(sasBuilder);
+
+        _logger.LogInformation(
+            "Generated SAS URL for {BlobPath}, expires in {ExpiryMinutes}m",
+            blobPath, expiry.TotalMinutes);
+
+        return sasUri.ToString();
+    }
+
+    public async Task DeleteAsync(string blobPath, CancellationToken ct = default)
+    {
+        var container  = _blobService.GetBlobContainerClient(_options.ContainerName);
+        var blobClient = container.GetBlobClient(blobPath);
+        await blobClient.DeleteIfExistsAsync(cancellationToken: ct);
+
+        _logger.LogInformation("Deleted blob: {BlobPath}", blobPath);
+    }
+
+    private static string SanitiseFileName(string fileName)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var clean   = new string(fileName.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
+        return clean.Length > 100 ? clean[..100] : clean;
+    }
+}
+
+/// <summary>Bound to "BlobStorage" section in appsettings.json.</summary>
+public sealed class BlobStorageOptions
+{
+    public const string Section = "BlobStorage";
+
+    public string ConnectionString { get; set; } = string.Empty;
+    public string ContainerName    { get; set; } = "iso-documents";
+    public int    SasExpiryHours   { get; set; } = 1;
+}
+
+ 
+4. Search — Elasticsearch
+Full-text search qua Elasticsearch thay vì SQL LIKE. Khi document được Published, domain event handler gọi UpdateDocumentIndexAsync để cập nhật index. Tìm kiếm theo Title (boost 3x), DocumentCode (2x), Description, Tags.
+
+Query type	Áp dụng cho
+MultiMatch (BestFields)	Keyword search: Title, DocumentCode, Description, Tags
+Term (exact)	IsoStandard, Status, Category, OwnerId filter
+DateRange	FromDate / ToDate filter trên UpdatedAt
+Highlight	Fragments từ Title và Description (hiển thị trong UI)
+Sort	UpdatedAt DESC (mặc định)
+
+Fuzziness AUTO cho phép tìm kiếm với lỗi đánh máy (1 ký tự sai với từ 5+ ký tự). Phù hợp với search box — người dùng không cần gõ chính xác.
+
+using Elastic.Clients.Elasticsearch;
+using Elastic.Clients.Elasticsearch.QueryDsl;
+using IsoDoc.Domain.Entities;
+using IsoDoc.Domain.Interfaces;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace IsoDoc.Infrastructure.Search;
+
+/// <summary>
+/// Elasticsearch implementation of ISearchService.
+/// Uses NEST v8 (Elastic.Clients.Elasticsearch).
+///
+/// Index: iso-documents
+/// Each document in the index mirrors Document entity fields
+/// plus denormalised owner name for display without joins.
+///
+/// Full-text search covers: Title, DocumentCode, Tags, Description.
+/// Filters applied as structured queries (no scoring penalty).
+/// </summary>
+public sealed class ElasticsearchService : ISearchService
+{
+    private readonly ElasticsearchClient         _client;
+    private readonly ElasticsearchOptions        _options;
+    private readonly ILogger<ElasticsearchService> _logger;
+
+    public ElasticsearchService(
+        ElasticsearchClient              client,
+        IOptions<ElasticsearchOptions>   options,
+        ILogger<ElasticsearchService>    logger)
+    {
+        _client  = client;
+        _options = options.Value;
+        _logger  = logger;
+    }
+
+    // ── Index / Update ────────────────────────────────────────────────────
+
+    public async Task IndexDocumentAsync(Document document, CancellationToken ct = default)
+    {
+        var indexDoc = MapToIndexDocument(document);
+        var response = await _client.IndexAsync(indexDoc,
+            idx => idx.Index(_options.IndexName).Id(document.Id.ToString()), ct);
+
+        if (!response.IsSuccess())
+            _logger.LogError("Elasticsearch index failed for {Id}: {Error}",
+                document.Id, response.ElasticsearchServerError?.Error?.Reason);
+    }
+
+    public async Task UpdateDocumentIndexAsync(Document document, CancellationToken ct = default)
+    {
+        var indexDoc = MapToIndexDocument(document);
+        var response = await _client.UpdateAsync<DocumentIndexModel, DocumentIndexModel>(
+            _options.IndexName, document.Id.ToString(),
+            u => u.Doc(indexDoc), ct);
+
+        if (!response.IsSuccess())
+        {
+            // If doc doesn't exist yet, index it fresh
+            _logger.LogWarning("Update failed for {Id}, attempting full index.", document.Id);
+            await IndexDocumentAsync(document, ct);
+        }
+    }
+
+    public async Task RemoveDocumentAsync(Guid documentId, CancellationToken ct = default)
+    {
+        await _client.DeleteAsync(_options.IndexName, documentId.ToString(), ct);
+        _logger.LogInformation("Removed document {Id} from search index.", documentId);
+    }
+
+    // ── Search ────────────────────────────────────────────────────────────
+
+    public async Task<SearchResult> SearchAsync(SearchQuery query, CancellationToken ct = default)
+    {
+        var from = (query.Page - 1) * query.PageSize;
+
+        var response = await _client.SearchAsync<DocumentIndexModel>(s => s
+            .Index(_options.IndexName)
+            .From(from)
+            .Size(query.PageSize)
+            .Query(q => BuildQuery(q, query))
+            .Highlight(h => h
+                .Fields(f => f
+                    .Add(Infer.Field<DocumentIndexModel>(d => d.Title),
+                        new HighlightField { NumberOfFragments = 2, FragmentSize = 150 })
+                    .Add(Infer.Field<DocumentIndexModel>(d => d.Description),
+                        new HighlightField { NumberOfFragments = 1, FragmentSize = 200 })))
+            .Sort(so => so
+                .Field(Infer.Field<DocumentIndexModel>(d => d.UpdatedAt),
+                    new FieldSort { Order = SortOrder.Desc })),
+            ct);
+
+        if (!response.IsSuccess())
+        {
+            _logger.LogError("Elasticsearch search failed: {Error}",
+                response.ElasticsearchServerError?.Error?.Reason);
+            return new SearchResult(Array.Empty<SearchHit>(), 0, query.Page, query.PageSize);
+        }
+
+        var hits = response.Hits.Select(hit =>
+        {
+            var highlights = hit.Highlight?
+                .SelectMany(kv => kv.Value)
+                .ToList() ?? new List<string>();
+
+            return new SearchHit(
+                DocumentId:   hit.Source!.Id,
+                DocumentCode: hit.Source.DocumentCode,
+                Title:        hit.Source.Title,
+                Status:       hit.Source.Status,
+                Standard:     hit.Source.IsoStandard,
+                Score:        hit.Score ?? 0,
+                Highlights:   highlights.AsReadOnly());
+        }).ToList();
+
+        return new SearchResult(
+            hits.AsReadOnly(),
+            (int)(response.Total),
+            query.Page,
+            query.PageSize);
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────
+
+    private static Query BuildQuery(QueryDescriptor<DocumentIndexModel> q, SearchQuery query)
+    {
+        var filters = new List<Query>();
+
+        // Full-text search across multiple fields
+        if (!string.IsNullOrWhiteSpace(query.Keyword))
+        {
+            filters.Add(q.MultiMatch(mm => mm
+                .Fields(new[] { "title^3", "documentCode^2", "description", "tags" })
+                .Query(query.Keyword)
+                .Type(TextQueryType.BestFields)
+                .Fuzziness(new Fuzziness("AUTO"))));
+        }
+
+        // Structured filters (exact match — no scoring)
+        if (query.Standard.HasValue)
+            filters.Add(q.Term(t => t.Field(d => d.IsoStandard).Value(query.Standard.Value.ToString())));
+
+        if (query.Status.HasValue)
+            filters.Add(q.Term(t => t.Field(d => d.Status).Value(query.Status.Value.ToString())));
+
+        if (query.Category.HasValue)
+            filters.Add(q.Term(t => t.Field(d => d.Category).Value(query.Category.Value.ToString())));
+
+        if (query.OwnerId.HasValue)
+            filters.Add(q.Term(t => t.Field(d => d.OwnerId).Value(query.OwnerId.Value.ToString())));
+
+        if (query.FromDate.HasValue || query.ToDate.HasValue)
+            filters.Add(q.DateRange(r => r
+                .Field(d => d.UpdatedAt)
+                .Gte(query.FromDate)
+                .Lte(query.ToDate)));
+
+        return filters.Count == 0
+            ? q.MatchAll(new MatchAllQuery())
+            : q.Bool(b => b.Must(filters.ToArray()));
+    }
+
+    private static DocumentIndexModel MapToIndexDocument(Document document)
+        => new()
+        {
+            Id           = document.Id,
+            DocumentCode = document.Code.Value,
+            Title        = document.Title,
+            Description  = document.Description,
+            IsoStandard  = document.Standard.ToString(),
+            Category     = document.Category.ToString(),
+            Status       = document.Status.ToString(),
+            Tags         = document.Tags.ToArray(),
+            OwnerId      = document.OwnerId.ToString(),
+            UpdatedAt    = document.UpdatedAt
+        };
+}
+
+/// <summary>Elasticsearch index document model.</summary>
+public sealed class DocumentIndexModel
+{
+    public Guid     Id           { get; set; }
+    public string   DocumentCode { get; set; } = string.Empty;
+    public string   Title        { get; set; } = string.Empty;
+    public string?  Description  { get; set; }
+    public string   IsoStandard  { get; set; } = string.Empty;
+    public string   Category     { get; set; } = string.Empty;
+    public string   Status       { get; set; } = string.Empty;
+    public string[] Tags         { get; set; } = Array.Empty<string>();
+    public string   OwnerId      { get; set; } = string.Empty;
+    public DateTime UpdatedAt    { get; set; }
+}
+
+public sealed class ElasticsearchOptions
+{
+    public const string Section = "Elasticsearch";
+    public string Uri       { get; set; } = "http://localhost:9200";
+    public string IndexName { get; set; } = "iso-documents";
+    public string? ApiKey   { get; set; }
+}
+
+ 
+5. Identity — JWT + Permissions
+JWT token chứa sub (userId), roles, email. CurrentUserService đọc từ HttpContext.User — Application layer không biết JWT tồn tại, chỉ dùng ICurrentUserService. PermissionService cache role-permission map trong Redis 5 phút để giảm DB queries.
+
+JWT Claim	Giá trị
+sub	User GUID
+email	User email
+name	Full name
+ClaimTypes.Role	Mỗi role là một claim riêng (hỗ trợ multiple roles)
+jti	Unique token ID (blacklist support)
+iat	Issued at (Unix timestamp)
+
+using IsoDoc.Application.Common.Interfaces;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+
+namespace IsoDoc.Infrastructure.Identity;
+
+/// <summary>
+/// Generates and validates JWT access tokens.
+///
+/// Token claims:
+///   sub       = User GUID
+///   email     = User email
+///   name      = Full name
+///   roles     = Comma-separated role names
+///   iso_scope = Comma-separated ISO standards in scope
+///
+/// Tokens expire in JwtOptions.ExpiryMinutes (default: 60 minutes).
+/// Refresh tokens are opaque GUIDs stored in the database.
+/// </summary>
+public sealed class JwtTokenService
+{
+    private readonly JwtOptions _options;
+
+    public JwtTokenService(IOptions<JwtOptions> options)
+        => _options = options.Value;
+
+    public string GenerateAccessToken(
+        Guid             userId,
+        string           email,
+        string           fullName,
+        IList<string>    roles)
+    {
+        var key         = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SecretKey));
+        var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+        var claims = new List<Claim>
+        {
+            new(JwtRegisteredClaimNames.Sub,   userId.ToString()),
+            new(JwtRegisteredClaimNames.Email, email),
+            new(JwtRegisteredClaimNames.Name,  fullName),
+            new(JwtRegisteredClaimNames.Jti,   Guid.NewGuid().ToString()),
+            new(JwtRegisteredClaimNames.Iat,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(),
+                ClaimValueTypes.Integer64)
+        };
+
+        // Add role claims (one claim per role for standard role-checking)
+        claims.AddRange(roles.Select(r => new Claim(ClaimTypes.Role, r)));
+
+        var token = new JwtSecurityToken(
+            issuer:   _options.Issuer,
+            audience: _options.Audience,
+            claims:   claims,
+            expires:  DateTime.UtcNow.AddMinutes(_options.ExpiryMinutes),
+            signingCredentials: credentials);
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    /// <summary>Validates token and returns ClaimsPrincipal (for refresh flow).</summary>
+    public ClaimsPrincipal? ValidateToken(string token)
+    {
+        var handler    = new JwtSecurityTokenHandler();
+        var key        = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SecretKey));
+        var parameters = new TokenValidationParameters
+        {
+            ValidateIssuer           = true,
+            ValidIssuer              = _options.Issuer,
+            ValidateAudience         = true,
+            ValidAudience            = _options.Audience,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey         = key,
+            ValidateLifetime         = false,  // Allow expired tokens in refresh flow
+            ClockSkew                = TimeSpan.Zero
+        };
+
+        try
+        {
+            return handler.ValidateToken(token, parameters, out _);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+}
+
+/// <summary>
+/// Reads the current user's identity from the HTTP request JWT.
+/// Implements ICurrentUserService (Application interface).
+/// Scoped per request via DI.
+/// </summary>
+public sealed class CurrentUserService : ICurrentUserService
+{
+    private readonly IHttpContextAccessor _httpContext;
+
+    public CurrentUserService(IHttpContextAccessor httpContext)
+        => _httpContext = httpContext;
+
+    private ClaimsPrincipal? User => _httpContext.HttpContext?.User;
+
+    public Guid? UserId => User?.FindFirstValue(ClaimTypes.NameIdentifier) is string id
+        && Guid.TryParse(id, out var guid) ? guid : null;
+
+    public string? Email    => User?.FindFirstValue(ClaimTypes.Email);
+    public string? FullName => User?.FindFirstValue(ClaimTypes.Name);
+    public bool IsAuthenticated => User?.Identity?.IsAuthenticated ?? false;
+
+    public IReadOnlyList<string> Roles =>
+        User?.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList()
+        ?? new List<string>();
+}
+
+/// <summary>
+/// RBAC permission checker with Redis caching.
+/// Loads user permissions once per session, caches for 5 minutes.
+/// </summary>
+public sealed class PermissionService : IPermissionService
+{
+    private readonly AppDbContext   _db;
+    private readonly IRedisCacheService _cache;
+
+    public PermissionService(AppDbContext db, IRedisCacheService cache)
+    {
+        _db    = db;
+        _cache = cache;
+    }
+
+    public async Task<bool> HasPermissionAsync(
+        Guid userId, string permissionCode, CancellationToken ct = default)
+    {
+        var permissions = await GetUserPermissionsAsync(userId, ct);
+        return permissions.Contains(permissionCode);
+    }
+
+    public async Task<IReadOnlyList<string>> GetUserPermissionsAsync(
+        Guid userId, CancellationToken ct = default)
+    {
+        var cacheKey = $"user-permissions:{userId}";
+        var cached   = await _cache.GetAsync<List<string>>(cacheKey, ct);
+        if (cached is not null) return cached;
+
+        // Load from DB: UserRoles → Roles → RolePermissions → Permissions
+        // (UserRoles table is managed by ASP.NET Core Identity)
+        var permissions = await Task.FromResult(new List<string>()); // Simplified — real: EF query
+
+        await _cache.SetAsync(cacheKey, permissions, TimeSpan.FromMinutes(5), ct);
+        return permissions;
+    }
+}
+
+// ── Options ───────────────────────────────────────────────────────────────────
+
+public sealed class JwtOptions
+{
+    public const string Section = "Jwt";
+    public string SecretKey    { get; set; } = string.Empty;
+    public string Issuer       { get; set; } = "isodms.internal";
+    public string Audience     { get; set; } = "isodms.client";
+    public int    ExpiryMinutes { get; set; } = 60;
+}
+
+// ── Redis cache interface (used by PermissionService) ─────────────────────────
+
+public interface IRedisCacheService
+{
+    Task<T?> GetAsync<T>(string key, CancellationToken ct = default) where T : class;
+    Task SetAsync<T>(string key, T value, TimeSpan expiry, CancellationToken ct = default) where T : class;
+    Task RemoveAsync(string key, CancellationToken ct = default);
+}
+
+ 
+6. Cache + Notifications
+RedisCacheService fail gracefully — nếu Redis không available, trả về null và tiếp tục. Không để cache failure block business operation. NotificationService có comment hướng dẫn tích hợp MailKit SMTP và SignalR Hub.
+
+using IsoDoc.Application.Common.Interfaces;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using StackExchange.Redis;
+using System.Text.Json;
+
+namespace IsoDoc.Infrastructure.Cache;
+
+/// <summary>
+/// Redis distributed cache implementation.
+/// Used for: user permission sets, search result caching, session data.
+/// Falls back gracefully if Redis is unavailable (logs warning, continues).
+/// </summary>
+public sealed class RedisCacheService : IRedisCacheService
+{
+    private readonly IConnectionMultiplexer _redis;
+    private readonly ILogger<RedisCacheService> _logger;
+
+    private static readonly JsonSerializerOptions _json = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    public RedisCacheService(
+        IConnectionMultiplexer     redis,
+        ILogger<RedisCacheService> logger)
+    {
+        _redis  = redis;
+        _logger = logger;
+    }
+
+    public async Task<T?> GetAsync<T>(string key, CancellationToken ct = default)
+        where T : class
+    {
+        try
+        {
+            var db    = _redis.GetDatabase();
+            var value = await db.StringGetAsync(key);
+            if (!value.HasValue) return null;
+
+            return JsonSerializer.Deserialize<T>(value!, _json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Redis GET failed for key {Key}", key);
+            return null;
+        }
+    }
+
+    public async Task SetAsync<T>(
+        string key, T value, TimeSpan expiry, CancellationToken ct = default)
+        where T : class
+    {
+        try
+        {
+            var db   = _redis.GetDatabase();
+            var json = JsonSerializer.Serialize(value, _json);
+            await db.StringSetAsync(key, json, expiry);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Redis SET failed for key {Key}", key);
+        }
+    }
+
+    public async Task RemoveAsync(string key, CancellationToken ct = default)
+    {
+        try
+        {
+            var db = _redis.GetDatabase();
+            await db.KeyDeleteAsync(key);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Redis DELETE failed for key {Key}", key);
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace IsoDoc.Infrastructure.Notifications;
+
+/// <summary>
+/// Email + in-app notification sender.
+/// Email: uses SendGrid (swap for SMTP via MailKit if on-premise).
+/// In-app: pushes via SignalR hub to connected Blazor clients.
+/// </summary>
+public sealed class NotificationService : INotificationSender
+{
+    private readonly NotificationOptions _options;
+    private readonly ILogger<NotificationService> _logger;
+    // private readonly IHubContext<NotificationHub> _hub;  // Uncomment when SignalR hub added
+
+    public NotificationService(
+        IOptions<NotificationOptions> options,
+        ILogger<NotificationService>  logger)
+    {
+        _options = options.Value;
+        _logger  = logger;
+    }
+
+    public async Task SendEmailAsync(
+        string toEmail,
+        string subject,
+        string htmlBody,
+        CancellationToken ct = default)
+    {
+        // Production: replace with SendGrid SDK or MailKit SMTP client
+        _logger.LogInformation(
+            "Sending email to {ToEmail}: {Subject}", toEmail, subject);
+
+        // Example with MailKit (uncomment and add MailKit NuGet):
+        // using var smtp = new MailKit.Net.Smtp.SmtpClient();
+        // await smtp.ConnectAsync(_options.SmtpHost, _options.SmtpPort, ct);
+        // await smtp.AuthenticateAsync(_options.SmtpUser, _options.SmtpPass, ct);
+        // var message = new MimeKit.MimeMessage();
+        // message.From.Add(MimeKit.MailboxAddress.Parse(_options.FromAddress));
+        // message.To.Add(MimeKit.MailboxAddress.Parse(toEmail));
+        // message.Subject = subject;
+        // message.HtmlBody = htmlBody;
+        // await smtp.SendAsync(message, ct);
+
+        await Task.CompletedTask;
+    }
+
+    public async Task SendInAppNotificationAsync(
+        Guid   userId,
+        string title,
+        string message,
+        string? actionUrl = null,
+        CancellationToken ct = default)
+    {
+        // Production: push via SignalR hub to the user's connection group
+        _logger.LogInformation(
+            "In-app notification → User {UserId}: {Title}", userId, title);
+
+        // Example with SignalR (uncomment when hub is configured):
+        // await _hub.Clients
+        //     .Group(userId.ToString())
+        //     .SendAsync("ReceiveNotification", new { title, message, actionUrl }, ct);
+
+        await Task.CompletedTask;
+    }
+}
+
+public sealed class NotificationOptions
+{
+    public const string Section = "Notifications";
+    public string SmtpHost    { get; set; } = "localhost";
+    public int    SmtpPort    { get; set; } = 587;
+    public string SmtpUser    { get; set; } = string.Empty;
+    public string SmtpPass    { get; set; } = string.Empty;
+    public string FromAddress { get; set; } = "noreply@isodms.internal";
+    public string FromName    { get; set; } = "ISO Document System";
+}
+
+
+7. Dependency Injection
+Một method AddInfrastructureServices(configuration) đăng ký toàn bộ 10 services. Tất cả external client (BlobServiceClient, ElasticsearchClient, IConnectionMultiplexer) được đăng ký Singleton — khởi tạo connection pool một lần.
+
+using Azure.Storage.Blobs;
+using Elastic.Clients.Elasticsearch;
+using IsoDoc.Application.Common.Interfaces;
+using IsoDoc.Domain.Interfaces;
+using IsoDoc.Infrastructure.Cache;
+using IsoDoc.Infrastructure.Identity;
+using IsoDoc.Infrastructure.Notifications;
+using IsoDoc.Infrastructure.Persistence;
+using IsoDoc.Infrastructure.Persistence.Repositories;
+using IsoDoc.Infrastructure.Search;
+using IsoDoc.Infrastructure.Storage;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using StackExchange.Redis;
+
+namespace IsoDoc.Infrastructure;
+
+/// <summary>
+/// Registers all Infrastructure services.
+/// Called from WebAPI/Program.cs: services.AddInfrastructureServices(configuration)
+/// </summary>
+public static class DependencyInjection
+{
+    public static IServiceCollection AddInfrastructureServices(
+        this IServiceCollection services,
+        IConfiguration          configuration)
+    {
+        // ── EF Core + SQL Server ─────────────────────────────────────────
+        services.AddDbContext<AppDbContext>(options =>
+            options.UseSqlServer(
+                configuration.GetConnectionString("DefaultConnection"),
+                sql =>
+                {
+                    sql.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName);
+                    sql.CommandTimeout(30);
+                    sql.EnableRetryOnFailure(
+                        maxRetryCount:       3,
+                        maxRetryDelay:       TimeSpan.FromSeconds(5),
+                        errorNumbersToAdd:   null);
+                }));
+
+        // ── Repositories ─────────────────────────────────────────────────
+        services.AddScoped<IDocumentRepository,         DocumentRepository>();
+        services.AddScoped<IApprovalWorkflowRepository, ApprovalWorkflowRepository>();
+
+        // ── Audit ─────────────────────────────────────────────────────────
+        services.AddScoped<IAuditService, AuditService>();
+
+        // ── Azure Blob Storage ────────────────────────────────────────────
+        services.Configure<BlobStorageOptions>(
+            configuration.GetSection(BlobStorageOptions.Section));
+
+        services.AddSingleton(sp =>
+        {
+            var opts = configuration
+                .GetSection(BlobStorageOptions.Section)
+                .Get<BlobStorageOptions>()!;
+            return new BlobServiceClient(opts.ConnectionString);
+        });
+
+        services.AddScoped<IFileStorageService, AzureBlobStorageService>();
+
+        // ── Elasticsearch ─────────────────────────────────────────────────
+        services.Configure<ElasticsearchOptions>(
+            configuration.GetSection(ElasticsearchOptions.Section));
+
+        services.AddSingleton(sp =>
+        {
+            var opts = configuration
+                .GetSection(ElasticsearchOptions.Section)
+                .Get<ElasticsearchOptions>()!;
+
+            var settings = new ElasticsearchClientSettings(new Uri(opts.Uri));
+            if (!string.IsNullOrEmpty(opts.ApiKey))
+                settings.Authentication(new Elastic.Transport.ApiKey(opts.ApiKey));
+
+            return new ElasticsearchClient(settings);
+        });
+
+        services.AddScoped<ISearchService, ElasticsearchService>();
+
+        // ── Redis ─────────────────────────────────────────────────────────
+        services.AddSingleton<IConnectionMultiplexer>(sp =>
+            ConnectionMultiplexer.Connect(
+                configuration.GetConnectionString("Redis")
+                ?? "localhost:6379"));
+
+        services.AddScoped<IRedisCacheService, RedisCacheService>();
+
+        // ── Identity / JWT ────────────────────────────────────────────────
+        services.Configure<JwtOptions>(
+            configuration.GetSection(JwtOptions.Section));
+
+        services.AddSingleton<JwtTokenService>();
+        services.AddHttpContextAccessor();
+        services.AddScoped<ICurrentUserService, CurrentUserService>();
+        services.AddScoped<IPermissionService,  PermissionService>();
+
+        // ── Notifications ─────────────────────────────────────────────────
+        services.Configure<NotificationOptions>(
+            configuration.GetSection(NotificationOptions.Section));
+
+        services.AddScoped<INotificationSender, NotificationService>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Runs EF Core migrations on startup (development only).
+    /// In production: use CI/CD pipeline migration step instead.
+    /// </summary>
+    public static async Task ApplyMigrationsAsync(IServiceProvider services)
+    {
+        using var scope = services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await db.Database.MigrateAsync();
+    }
+}
+
+ 
+8. appsettings.json Template
+Template đầy đủ tất cả sections cần thiết. Trong production: các secret (ConnectionString, ApiKey, SmtpPass, Jwt.SecretKey) phải được lưu trong Azure Key Vault hoặc environment variables — KHÔNG commit vào source control.
+
+Thay đổi Jwt:SecretKey thành chuỗi ngẫu nhiên >= 32 ký tự trước khi deploy. Dùng: openssl rand -base64 32 để tạo.
+
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=localhost,1433;Database=IsoDocumentDb;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True;MultipleActiveResultSets=True",
+    "Redis": "localhost:6379,abortConnect=false,connectTimeout=5000,syncTimeout=5000"
+  },
+
+  "BlobStorage": {
+    "ConnectionString": "DefaultEndpointsProtocol=https;AccountName=youraccount;AccountKey=yourkey;EndpointSuffix=core.windows.net",
+    "ContainerName": "iso-documents",
+    "SasExpiryHours": 1
+  },
+
+  "Elasticsearch": {
+    "Uri": "http://localhost:9200",
+    "IndexName": "iso-documents",
+    "ApiKey": ""
+  },
+
+  "Jwt": {
+    "SecretKey": "CHANGE_THIS_TO_A_STRONG_SECRET_KEY_AT_LEAST_32_CHARS",
+    "Issuer": "isodms.internal",
+    "Audience": "isodms.client",
+    "ExpiryMinutes": 60
+  },
+
+  "Notifications": {
+    "SmtpHost": "smtp.yourdomain.com",
+    "SmtpPort": 587,
+    "SmtpUser": "noreply@yourdomain.com",
+    "SmtpPass": "SMTP_PASSWORD",
+    "FromAddress": "noreply@yourdomain.com",
+    "FromName": "ISO Document Management System"
+  },
+
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft": "Warning",
+        "Microsoft.EntityFrameworkCore.Database.Command": "Warning",
+        "System": "Warning"
+      }
+    },
+    "WriteTo": [
+      { "Name": "Console" },
+      {
+        "Name": "File",
+        "Args": {
+          "path": "logs/isodms-.log",
+          "rollingInterval": "Day",
+          "retainedFileCountLimit": 30
+        }
+      }
+    ],
+    "Enrich": ["FromLogContext", "WithMachineName", "WithThreadId"]
+  }
+}
+
+
+8.1  NuGet packages cần thiết
+Package	Version	Dùng cho
+Microsoft.EntityFrameworkCore.SqlServer	8.x	EF Core + SQL Server
+Microsoft.EntityFrameworkCore.Tools	8.x	Migrations CLI
+Azure.Storage.Blobs	12.x	Blob Storage SDK
+Elastic.Clients.Elasticsearch	8.x	NEST v8 (Elasticsearch)
+StackExchange.Redis	2.x	Redis client
+Microsoft.AspNetCore.Authentication.JwtBearer	8.x	JWT middleware
+System.IdentityModel.Tokens.Jwt	7.x	JWT generation
+Microsoft.AspNetCore.Identity.EntityFrameworkCore	8.x	ASP.NET Identity
+Serilog.AspNetCore	8.x	Structured logging
+Serilog.Sinks.File	5.x	Log file output
+
+--- Hết Phần 3: Infrastructure Layer. Phần tiếp theo: WebAPI Layer (Controllers, Middleware, Swagger, Program.cs) ---

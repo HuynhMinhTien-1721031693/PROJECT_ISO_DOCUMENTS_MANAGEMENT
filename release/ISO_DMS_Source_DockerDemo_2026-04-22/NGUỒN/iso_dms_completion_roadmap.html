@@ -1,0 +1,250 @@
+
+<h2 class="sr-only">Roadmap hoàn thành dự án ISO Documents Management kèm yêu cầu Android APK</h2>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans)}
+.wrap{padding:1rem 0}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:1.25rem}
+.tab{padding:6px 14px;border-radius:var(--border-radius-md);border:0.5px solid var(--color-border-secondary);background:transparent;color:var(--color-text-secondary);font-size:13px;cursor:pointer;transition:all .15s}
+.tab.active{background:var(--color-background-secondary);color:var(--color-text-primary);border-color:var(--color-border-primary);font-weight:500}
+.section{display:none}.section.active{display:block}
+.card{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:1rem 1.25rem;margin-bottom:.75rem}
+.card-title{font-size:14px;font-weight:500;color:var(--color-text-primary);margin-bottom:.5rem;display:flex;align-items:center;gap:8px}
+.badge{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:500}
+.badge-done{background:var(--color-background-success);color:var(--color-text-success)}
+.badge-todo{background:var(--color-background-warning);color:var(--color-text-warning)}
+.badge-new{background:var(--color-background-info);color:var(--color-text-info)}
+.badge-crit{background:var(--color-background-danger);color:var(--color-text-danger)}
+.item{display:flex;align-items:flex-start;gap:10px;padding:6px 0;border-top:0.5px solid var(--color-border-tertiary);font-size:13px;color:var(--color-text-secondary);line-height:1.5}
+.item:first-of-type{border-top:none}
+.dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:5px}
+.dot-done{background:#1D9E75}.dot-todo{background:#BA7517}.dot-new{background:#185FA5}.dot-crit{background:#A32D2D}
+.pkg{background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:4px;padding:2px 6px;font-family:var(--font-mono);font-size:11px;color:var(--color-text-secondary)}
+.progress-bar{height:6px;border-radius:3px;background:var(--color-border-tertiary);margin:.5rem 0 1rem;overflow:hidden}
+.progress-fill{height:100%;background:#1D9E75;border-radius:3px;transition:width .4s ease}
+.meta{font-size:12px;color:var(--color-text-tertiary);margin-bottom:1rem}
+.sprint-row{display:grid;grid-template-columns:80px 1fr auto;gap:8px;padding:7px 0;border-top:0.5px solid var(--color-border-tertiary);align-items:center;font-size:13px}
+.sprint-row:first-child{border-top:none}
+.sprint-num{font-weight:500;color:var(--color-text-primary)}
+.sprint-label{color:var(--color-text-secondary)}
+.sprint-badge{font-size:11px;padding:2px 8px;border-radius:4px}
+</style>
+<div class="wrap">
+<div class="tabs">
+  <button class="tab active" onclick="show('overview')">Tổng quan</button>
+  <button class="tab" onclick="show('backend')">Backend (.NET 8)</button>
+  <button class="tab" onclick="show('frontend')">Frontend (Blazor)</button>
+  <button class="tab" onclick="show('android')">Android APK ★</button>
+  <button class="tab" onclick="show('infra')">Hạ tầng & DevOps</button>
+  <button class="tab" onclick="show('sprint')">Roadmap Sprint</button>
+</div>
+
+<!-- OVERVIEW -->
+<div id="s-overview" class="section active">
+  <div class="card">
+    <div class="card-title">Tiến độ tổng thể ước tính <span class="badge badge-todo">~30% hoàn thành</span></div>
+    <div class="progress-bar"><div class="progress-fill" style="width:30%"></div></div>
+    <div class="meta">Dự án có kiến trúc tốt (Clean Architecture), đã có solution structure và một phần code. Cần hoàn thiện các layer và bổ sung thêm dự án Android.</div>
+    <div class="item"><span class="dot dot-done"></span><span><strong style="color:var(--color-text-primary)">Đã có:</strong> Solution structure, Domain entities, một phần Application layer, WebAPI skeleton, Architecture doc</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span><strong style="color:var(--color-text-primary)">Chưa có:</strong> Infrastructure hoàn chỉnh, Blazor UI, CI/CD, Testing, Android app</span></div>
+    <div class="item"><span class="dot dot-new"></span><span><strong style="color:var(--color-text-primary)">Bổ sung mới:</strong> Project <code class="pkg">IsoDoc.MauiApp</code> — .NET MAUI Blazor Hybrid để build APK Android</span></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Công nghệ chính</div>
+    <div class="item"><span class="dot dot-done"></span><span>.NET 8 · ASP.NET Core · MediatR · FluentValidation · EF Core 8 · SQL Server</span></div>
+    <div class="item"><span class="dot dot-done"></span><span>Azure Blob Storage · Elasticsearch · Redis · Serilog · JWT Bearer</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>MudBlazor 7.x (Blazor Server UI) — <em>chưa cài đặt</em></span></div>
+    <div class="item"><span class="dot dot-new"></span><span>.NET MAUI 8 · MAUI Blazor Hybrid · Android SDK 33+ — <em>dự án mới</em></span></div>
+  </div>
+</div>
+
+<!-- BACKEND -->
+<div id="s-backend" class="section">
+  <div class="card">
+    <div class="card-title">01_Domain <span class="badge badge-done">~80%</span></div>
+    <div class="progress-bar"><div class="progress-fill" style="width:80%"></div></div>
+    <div class="item"><span class="dot dot-done"></span><span>Document, DocumentVersion, ApprovalWorkflow, AuditLog entities</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Thêm Domain Events đầy đủ: <code class="pkg">DocumentApprovedEvent</code>, <code class="pkg">WorkflowRejectedEvent</code></span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Hoàn thiện Value Objects: DocumentCode, Version, Checksum</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Thêm Guard clauses trong mọi factory method của Entity</span></div>
+  </div>
+  <div class="card">
+    <div class="card-title">02_Application <span class="badge badge-todo">~40%</span></div>
+    <div class="progress-bar"><div class="progress-fill" style="width:40%"></div></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Commands: <code class="pkg">UploadDocumentCommand</code>, <code class="pkg">SubmitForApprovalCommand</code>, <code class="pkg">ApproveDocumentCommand</code>, <code class="pkg">RejectDocumentCommand</code></span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Queries: <code class="pkg">GetDocumentsQuery</code> (paged), <code class="pkg">GetDocumentByIdQuery</code>, <code class="pkg">SearchDocumentsQuery</code></span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>FluentValidation validators cho tất cả commands</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>AutoMapper profiles: Document → DocumentDto, Version → VersionDto</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Pipeline Behaviors: ValidationBehavior, LoggingBehavior, CachingBehavior</span></div>
+  </div>
+  <div class="card">
+    <div class="card-title">03_Infrastructure <span class="badge badge-todo">~35%</span></div>
+    <div class="progress-bar"><div class="progress-fill" style="width:35%"></div></div>
+    <div class="item"><span class="dot dot-todo"></span><span>AppDbContext, Entity configurations (IEntityTypeConfiguration), DB Migrations</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Repositories: <code class="pkg">DocumentRepository</code>, <code class="pkg">WorkflowRepository</code>, <code class="pkg">AuditLogRepository</code></span></div>
+    <div class="item"><span class="dot dot-todo"></span><span><code class="pkg">AzureBlobStorageService</code> — upload, download, SAS URL generation</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span><code class="pkg">ElasticsearchService</code> — index document, full-text search, suggestions</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span><code class="pkg">JwtTokenService</code> — generate, refresh token rotation, lockout</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span><code class="pkg">AuditInterceptor</code> EF Core — tự động ghi AuditLogs (immutable)</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Email notification service (SMTP / SendGrid) cho workflow events</span></div>
+  </div>
+  <div class="card">
+    <div class="card-title">04_WebAPI <span class="badge badge-todo">~50%</span></div>
+    <div class="progress-bar"><div class="progress-fill" style="width:50%"></div></div>
+    <div class="item"><span class="dot dot-done"></span><span>Program.cs, ExceptionHandlingMiddleware, ApiResponse model</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Hoàn thiện DocumentsController (tất cả 8 endpoints + file upload)</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>WorkflowController, SearchController, AuthController</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>AuditMiddleware — ghi log IP, UserAgent mỗi request</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Swagger/OpenAPI với JWT auth support, phân nhóm endpoint</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Health checks: DB, Redis, Elasticsearch, Blob</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>CORS policy (cho Blazor WASM và MAUI app)</span></div>
+  </div>
+</div>
+
+<!-- FRONTEND BLAZOR -->
+<div id="s-frontend" class="section">
+  <div class="card">
+    <div class="card-title">05_Web — Blazor Server <span class="badge badge-todo">~20%</span></div>
+    <div class="progress-bar"><div class="progress-fill" style="width:20%"></div></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Cài đặt <code class="pkg">MudBlazor 7.x</code>, cấu hình theme + dark mode</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>MainLayout, NavMenu (ẩn/hiện menu theo Role RBAC)</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Dashboard.razor — KPI cards, PendingApprovalList, RecentDocuments</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>DocumentList.razor — MudDataGrid, filter, sort, phân trang</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>DocumentUpload.razor — wizard upload + chọn workflow</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>DocumentDetail.razor + DocumentViewer.razor (inline PDF)</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>ApprovalQueue.razor — danh sách cần duyệt theo Approver</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>ApprovalDetail.razor — xem tài liệu, ghi comment, approve/reject</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Admin pages: UserManagement.razor, RoleAssignment.razor</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>SignalR realtime notifications (workflow status, new document)</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>PDF viewer tích hợp (Syncfusion hoặc PSPDFKit)</span></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Services & State Management</div>
+    <div class="item"><span class="dot dot-todo"></span><span>IDocumentService, IWorkflowService — HTTP client gọi API</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>AuthenticationStateProvider tích hợp JWT</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Blazored.LocalStorage — lưu UI state, filter preferences</span></div>
+  </div>
+</div>
+
+<!-- ANDROID -->
+<div id="s-android" class="section">
+  <div class="card">
+    <div class="card-title">★ Dự án mới: IsoDoc.MauiApp <span class="badge badge-new">Bổ sung mới</span></div>
+    <div class="meta">Sử dụng .NET MAUI Blazor Hybrid — tái sử dụng Blazor components, build APK Android natively, kết nối cùng ASP.NET Core Web API backend.</div>
+    <div class="item"><span class="dot dot-new"></span><span>Tạo project: <code class="pkg">dotnet new maui-blazor -n IsoDoc.MauiApp</code> trong thư mục <code class="pkg">src/06_MauiApp/</code></span></div>
+    <div class="item"><span class="dot dot-new"></span><span>Thêm vào solution: <code class="pkg">IsoDocumentManagement.sln</code> → Add Project → IsoDoc.MauiApp</span></div>
+    <div class="item"><span class="dot dot-new"></span><span>Target framework: <code class="pkg">net8.0-android</code> (tối thiểu Android API 24 / Android 7.0)</span></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Yêu cầu môi trường build APK <span class="badge badge-crit">Bắt buộc</span></div>
+    <div class="item"><span class="dot dot-crit"></span><span><strong style="color:var(--color-text-primary)">Máy build:</strong> Windows 10/11 hoặc macOS 13+ (Ventura)</span></div>
+    <div class="item"><span class="dot dot-crit"></span><span><strong style="color:var(--color-text-primary)">.NET SDK 8.0.x</strong> với workload MAUI: <code class="pkg">dotnet workload install maui-android</code></span></div>
+    <div class="item"><span class="dot dot-crit"></span><span><strong style="color:var(--color-text-primary)">Android SDK:</strong> API Level 33+ (Android 13), Build Tools 33.0.x, Platform Tools</span></div>
+    <div class="item"><span class="dot dot-crit"></span><span><strong style="color:var(--color-text-primary)">Java JDK 11+</strong> (OpenJDK 17 khuyến nghị) — cần để compile Android</span></div>
+    <div class="item"><span class="dot dot-new"></span><span>Visual Studio 2022 v17.8+ (có Mobile development workload) hoặc VS Code + C# DevKit</span></div>
+    <div class="item"><span class="dot dot-new"></span><span>Android Emulator hoặc thiết bị thật để test (bật USB Debugging)</span></div>
+  </div>
+  <div class="card">
+    <div class="card-title">NuGet packages cần thêm vào IsoDoc.MauiApp</div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">Microsoft.Maui.Controls</code> 8.x — core MAUI framework</span></div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">Microsoft.AspNetCore.Components.WebView.Maui</code> 8.x — Blazor Hybrid host</span></div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">MudBlazor</code> 7.x — tái sử dụng components từ Blazor Server</span></div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">Microsoft.Extensions.Http</code> — HttpClient để gọi Web API</span></div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">System.IdentityModel.Tokens.Jwt</code> — lưu và parse JWT token</span></div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">Blazored.SecureStorage</code> — lưu token an toàn trên thiết bị Android</span></div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">Microsoft.AspNetCore.SignalR.Client</code> — realtime notifications</span></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Android Manifest permissions cần khai báo</div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">INTERNET</code> — kết nối Web API</span></div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">READ_EXTERNAL_STORAGE / WRITE_EXTERNAL_STORAGE</code> — download tài liệu</span></div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">CAMERA</code> (tuỳ chọn) — scan QR code tài liệu</span></div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">POST_NOTIFICATIONS</code> — push notifications workflow (Android 13+)</span></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Cấu trúc thư mục IsoDoc.MauiApp</div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">MauiProgram.cs</code> — đăng ký BlazorWebView, HttpClient, services</span></div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">Pages/</code> — tái sử dụng Blazor pages từ IsoDoc.BlazorApp (hoặc shared library)</span></div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">Services/ApiService.cs</code> — HTTP client gọi <code class="pkg">https://&lt;api-host&gt;/api/v1/</code></span></div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">Services/SecureStorageService.cs</code> — lưu JWT token bằng Android Keystore</span></div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">Platforms/Android/AndroidManifest.xml</code> — permissions, app metadata</span></div>
+    <div class="item"><span class="dot dot-new"></span><span><code class="pkg">wwwroot/</code> — Blazor static assets (CSS, JS)</span></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Build & ký APK</div>
+    <div class="item"><span class="dot dot-new"></span><span>Debug APK: <code class="pkg">dotnet build -f net8.0-android -c Debug</code></span></div>
+    <div class="item"><span class="dot dot-new"></span><span>Release APK (cần keystore): <code class="pkg">dotnet publish -f net8.0-android -c Release</code></span></div>
+    <div class="item"><span class="dot dot-new"></span><span>Tạo keystore: <code class="pkg">keytool -genkey -v -keystore isodms.keystore -alias isodms -keyalg RSA -keysize 2048 -validity 10000</code></span></div>
+    <div class="item"><span class="dot dot-new"></span><span>Khai báo trong <code class="pkg">.csproj</code>: <code class="pkg">AndroidKeyStore, AndroidSigningKeyAlias, AndroidSigningStorePass</code></span></div>
+    <div class="item"><span class="dot dot-new"></span><span>APK output: <code class="pkg">bin/Release/net8.0-android/publish/*.apk</code></span></div>
+  </div>
+</div>
+
+<!-- INFRA -->
+<div id="s-infra" class="section">
+  <div class="card">
+    <div class="card-title">Testing <span class="badge badge-todo">Chưa bắt đầu</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>IsoDoc.Domain.Tests — unit test Domain entities, rules, events (xUnit)</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>IsoDoc.Application.Tests — test handlers, validators, mapping (Moq + FluentAssertions)</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>IsoDoc.Integration.Tests — test API endpoints (WebApplicationFactory + Testcontainers)</span></div>
+    <div class="item"><span class="dot dot-new"></span><span>IsoDoc.MauiApp.Tests — unit test MAUI services, navigation logic</span></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Database & Migrations</div>
+    <div class="item"><span class="dot dot-todo"></span><span>Tạo initial migration: <code class="pkg">dotnet ef migrations add InitialSchema</code></span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Seed dữ liệu mẫu: Roles (SystemAdmin, ISOManager, Controller, Approver, Viewer)</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Full-text index trên Documents (Title, Tags) — SQL Server FULLTEXT CATALOG</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Covering indexes theo design spec (IX_Documents_Status_ISO, ...)</span></div>
+  </div>
+  <div class="card">
+    <div class="card-title">CI/CD & Docker</div>
+    <div class="item"><span class="dot dot-todo"></span><span>Dockerfile cho IsoDoc.WebAPI (multi-stage build)</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>docker-compose.yml: API + SQL Server + Redis + Elasticsearch</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>GitHub Actions workflow: build → test → publish WebAPI</span></div>
+    <div class="item"><span class="dot dot-new"></span><span>GitHub Actions: build Android APK → artifact upload (mỗi push vào main)</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>appsettings.template.json → điền đủ ConnectionStrings, BlobStorage, JWT, Elasticsearch</span></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Security (ISO 27001)</div>
+    <div class="item"><span class="dot dot-todo"></span><span>Rate limiting middleware (chống brute-force login)</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>AuditLog immutability — append-only policy, không cho UPDATE/DELETE</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>SHA-256 checksum verify khi download file (kiểm tra tính toàn vẹn)</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>HTTPS enforced, HSTS, secure cookie settings</span></div>
+    <div class="item"><span class="dot dot-new"></span><span>Android: Certificate pinning cho API calls (tránh MITM attacks)</span></div>
+    <div class="item"><span class="dot dot-new"></span><span>Android: JWT lưu bằng Android Keystore (không dùng SharedPreferences plain text)</span></div>
+  </div>
+</div>
+
+<!-- SPRINT ROADMAP -->
+<div id="s-sprint" class="section">
+  <div class="card">
+    <div class="card-title">Roadmap 10 Sprints (20 tuần)</div>
+    <div class="meta">8 sprints gốc + 2 sprints Android APK bổ sung</div>
+    <div class="sprint-row"><span class="sprint-num">Sprint 1</span><span class="sprint-label">Solution setup, DB migration, Identity + JWT, Role seeding</span><span class="sprint-badge badge-todo">Tuần 1-2</span></div>
+    <div class="sprint-row"><span class="sprint-num">Sprint 2</span><span class="sprint-label">Document CRUD API + Blob Storage, EF Core repositories</span><span class="sprint-badge badge-todo">Tuần 3-4</span></div>
+    <div class="sprint-row"><span class="sprint-num">Sprint 3</span><span class="sprint-label">Approval workflow state machine + Email/SignalR notifications</span><span class="sprint-badge badge-todo">Tuần 5-6</span></div>
+    <div class="sprint-row"><span class="sprint-num">Sprint 4</span><span class="sprint-label">Elasticsearch full-text search + Advanced search API</span><span class="sprint-badge badge-todo">Tuần 7-8</span></div>
+    <div class="sprint-row"><span class="sprint-num">Sprint 5</span><span class="sprint-label">Blazor UI: Dashboard, Document List, Upload wizard</span><span class="sprint-badge badge-todo">Tuần 9-10</span></div>
+    <div class="sprint-row"><span class="sprint-num">Sprint 6</span><span class="sprint-label">Blazor UI: Approval queue, Admin pages, PDF viewer</span><span class="sprint-badge badge-todo">Tuần 11-12</span></div>
+    <div class="sprint-row"><span class="sprint-num">Sprint 7</span><span class="sprint-label">Audit log UI, Reports ISO, Unit & Integration Testing</span><span class="sprint-badge badge-todo">Tuần 13-14</span></div>
+    <div class="sprint-row"><span class="sprint-num">Sprint 8</span><span class="sprint-label">UAT, Security review ISO 27001 checklist, Performance tuning</span><span class="sprint-badge badge-todo">Tuần 15-16</span></div>
+    <div class="sprint-row"><span class="sprint-num" style="color:var(--color-text-info)">Sprint 9 ★</span><span class="sprint-label">MAUI Blazor Hybrid setup, Authentication Android, shared Blazor components refactor</span><span class="sprint-badge badge-new">Tuần 17-18</span></div>
+    <div class="sprint-row"><span class="sprint-num" style="color:var(--color-text-info)">Sprint 10 ★</span><span class="sprint-label">Android UI polish, offline cache, build & ký APK, CI/CD pipeline Android, UAT</span><span class="sprint-badge badge-new">Tuần 19-20</span></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Ghi chú quan trọng</div>
+    <div class="item"><span class="dot dot-crit"></span><span>MAUI Blazor Hybrid yêu cầu tách Blazor components ra <code class="pkg">IsoDoc.BlazorShared</code> (Razor Class Library) để dùng chung giữa BlazorServer và MauiApp.</span></div>
+    <div class="item"><span class="dot dot-new"></span><span>Android app kết nối API qua HTTPS — cần cấu hình base URL trong <code class="pkg">appsettings.json</code> của MAUI (dev: <code class="pkg">http://10.0.2.2:5000</code> cho emulator).</span></div>
+    <div class="item"><span class="dot dot-todo"></span><span>Ưu tiên hoàn thiện Backend API hoàn chỉnh trước khi bắt đầu Android — MAUI app phụ thuộc hoàn toàn vào API.</span></div>
+  </div>
+</div>
+</div>
+
+<script>
+function show(id){
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('s-'+id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>

@@ -1,12 +1,13 @@
 <div class="card filters">
+    <p class="tiny" style="margin:0 0 8px 0;">Mẹo: nhập vài ký tự trong tiêu đề hoặc mã tài liệu để lọc nhanh, sau đó bấm <strong>Lọc dữ liệu</strong>.</p>
     <div class="field">
-        <label>Keyword</label>
-        <input placeholder="Title hoặc code" @bind="Model.Keyword" />
+        <label>Từ khóa</label>
+        <input placeholder="Nhập tiêu đề hoặc mã tài liệu" @bind="Model.Keyword" />
     </div>
     <div class="field">
-        <label>Status</label>
+        <label>Trạng thái</label>
         <select @bind="Model.Status">
-            <option value="">All</option>
+            <option value="">Tất cả</option>
             <option>Draft</option>
             <option>UnderReview</option>
             <option>PendingFinalApproval</option>
@@ -16,18 +17,18 @@
         </select>
     </div>
     <div class="field">
-        <label>ISO Standard</label>
+        <label>Tiêu chuẩn ISO</label>
         <select @bind="Model.Standard">
-            <option value="">All</option>
+            <option value="">Tất cả</option>
             <option>ISO9001</option>
             <option>ISO45001</option>
             <option>ISO27001</option>
         </select>
     </div>
     <div class="field">
-        <label>Category</label>
+        <label>Phân loại</label>
         <select @bind="Model.Category">
-            <option value="">All</option>
+            <option value="">Tất cả</option>
             <option>Policy</option>
             <option>Procedure</option>
             <option>WorkInstruction</option>
@@ -56,7 +57,7 @@
         </select>
     </div>
     <div class="field">
-        <label>/ trang</label>
+        <label>Số dòng/trang</label>
         <select @bind="Model.PageSize">
             <option value="10">10</option>
             <option value="20">20</option>
@@ -64,8 +65,8 @@
         </select>
     </div>
     <div class="actions">
-        <button class="btn" @onclick="Apply">Apply</button>
-        <button class="btn secondary" @onclick="Reset">Reset</button>
+        <button class="btn" @onclick="Apply">Lọc dữ liệu</button>
+        <button class="btn secondary" @onclick="Reset">Đặt lại bộ lọc</button>
     </div>
 </div>
 

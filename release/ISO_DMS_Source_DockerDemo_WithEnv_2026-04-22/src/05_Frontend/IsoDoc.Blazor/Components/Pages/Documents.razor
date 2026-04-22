@@ -1,0 +1,78 @@
+@page "/documents"
+@attribute [Authorize]
+@inject DocumentApiService DocumentApiService
+
+<div class="page-head" style="display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;">
+    <div>
+        <h1>Tài liệu</h1>
+        <p class="muted">Danh sách tài liệu với bộ lọc theo trạng thái, tiêu chuẩn ISO và ngày cập nhật.</p>
+    </div>
+    <a class="btn" href="/new-document">Tải lên mới</a>
+</div>
+@if (!Busy && string.IsNullOrWhiteSpace(Error))
+{
+    <p class="tiny" style="margin-bottom:8px;">Hiển thị <strong>@TotalCount</strong> tài liệu — trang @SearchParams.Page/@TotalPages, @SearchParams.PageSize mục mỗi trang.</p>
+}
+
+<FilterPanel Model="SearchParams" OnApply="LoadAsync" />
+
+@if (Busy)
+{
+    <p class="tiny">Đang tải dữ liệu...</p>
+}
+else if (!string.IsNullOrWhiteSpace(Error))
+{
+    <p class="error-banner">@Error</p>
+}
+
+<DocumentTable Items="DocumentsData" />
+
+<div class="pager">
+    <button class="btn secondary" disabled="@(SearchParams.Page <= 1)" @onclick="PrevPage">Prev</button>
+    <span>Trang @SearchParams.Page / @TotalPages</span>
+    <button class="btn secondary" disabled="@(SearchParams.Page >= TotalPages)" @onclick="NextPage">Next</button>
+</div>
+
+@code {
+    private SearchDocumentsParams SearchParams { get; set; } = new();
+    private IReadOnlyList<DocumentSummaryDto> DocumentsData { get; set; } = Array.Empty<DocumentSummaryDto>();
+    private string Error { get; set; } = string.Empty;
+    private bool Busy { get; set; }
+    private int TotalPages { get; set; } = 1;
+    private int TotalCount { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        Busy = true;
+        Error = string.Empty;
+        var (items, pagination, error) = await DocumentApiService.SearchAsync(SearchParams);
+        Busy = false;
+        DocumentsData = items;
+        Error = string.IsNullOrWhiteSpace(error) ? string.Empty : ApiProblemMessageFormatter.Format(error);
+        TotalPages = pagination?.TotalPages is > 0 ? pagination.TotalPages : 1;
+        TotalCount = pagination?.TotalCount ?? items.Count;
+    }
+
+    private async Task PrevPage()
+    {
+        if (SearchParams.Page > 1)
+        {
+            SearchParams.Page--;
+            await LoadAsync();
+        }
+    }
+
+    private async Task NextPage()
+    {
+        if (SearchParams.Page < TotalPages)
+        {
+            SearchParams.Page++;
+            await LoadAsync();
+        }
+    }
+}

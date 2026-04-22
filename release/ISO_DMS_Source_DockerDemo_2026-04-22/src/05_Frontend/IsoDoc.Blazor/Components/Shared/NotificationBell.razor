@@ -1,0 +1,140 @@
+@using IsoDoc.Blazor.Models
+@implements IAsyncDisposable
+@inject NotificationsApiService NotificationsApi
+@inject NotificationSignalRService HubNotifications
+@inject NavigationManager Navigation
+
+<div class="notif-bell-wrap">
+    <button type="button" class="notif-bell-btn" @onclick="ToggleAsync" title="Thông báo">
+        <span class="notif-bell-icon">&#128276;</span>
+        @if (_unread > 0)
+        {
+            <span class="notif-badge">@(_unread > 99 ? "99+" : _unread.ToString())</span>
+        }
+    </button>
+    @if (_open)
+    {
+        <div class="notif-panel card">
+            <div class="notif-panel-header">
+                <strong>Thông báo</strong>
+                <button type="button" class="btn-link" @onclick="MarkAllReadAsync">Đánh dấu đã đọc hết</button>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(_error))
+            {
+                <p class="error-banner" style="margin:8px;">@_error</p>
+            }
+            <ul class="notif-list">
+                @if (_items.Count == 0)
+                {
+                    <li class="muted" style="padding:12px;">Không có thông báo.</li>
+                }
+                else
+                {
+                    @foreach (var n in _items)
+                    {
+                        <li class="@(n.IsRead ? "notif-item read" : "notif-item")" @onclick="() => OpenAsync(n)">
+                            <div class="notif-title">@n.Title</div>
+                            <div class="notif-msg">@n.Message</div>
+                            <div class="notif-time muted">@n.CreatedAt.ToLocalTime().ToString("g")</div>
+                        </li>
+                    }
+                }
+            </ul>
+        </div>
+    }
+</div>
+
+@code {
+    private int _unread;
+    private bool _open;
+    private string _error = string.Empty;
+    private List<UserNotificationDto> _items = new();
+    private bool _hubHooked;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _hubHooked)
+            return;
+
+        _hubHooked = true;
+        HubNotifications.NotificationReceived += OnPushAsync;
+        try
+        {
+            await HubNotifications.EnsureConnectedAsync();
+        }
+        catch
+        {
+            // Hub optional when API down or user not logged in.
+        }
+
+        await RefreshCountsAsync();
+        StateHasChanged();
+    }
+
+    private async Task OnPushAsync()
+    {
+        await RefreshCountsAsync();
+        if (_open)
+            await LoadListAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task RefreshCountsAsync()
+    {
+        var (count, err) = await NotificationsApi.GetUnreadCountAsync();
+        if (err is null)
+            _unread = count;
+    }
+
+    private async Task ToggleAsync()
+    {
+        _open = !_open;
+        _error = string.Empty;
+        if (_open)
+            await LoadListAsync();
+    }
+
+    private async Task LoadListAsync()
+    {
+        var (items, _, err) = await NotificationsApi.GetListAsync(1, 15, unreadOnly: false);
+        _items = items?.ToList() ?? new List<UserNotificationDto>();
+        _error = err ?? string.Empty;
+    }
+
+    private async Task MarkAllReadAsync()
+    {
+        var (ok, err) = await NotificationsApi.MarkAllReadAsync();
+        if (!ok)
+            _error = err ?? "Không thể cập nhật.";
+        else
+        {
+            await RefreshCountsAsync();
+            await LoadListAsync();
+        }
+    }
+
+    private async Task OpenAsync(UserNotificationDto n)
+    {
+        if (!n.IsRead)
+        {
+            await NotificationsApi.MarkReadAsync(n.Id);
+            await RefreshCountsAsync();
+        }
+
+        if (!string.IsNullOrWhiteSpace(n.ActionUrl))
+        {
+            var url = n.ActionUrl.StartsWith("/", StringComparison.Ordinal)
+                ? n.ActionUrl
+                : "/" + n.ActionUrl;
+            Navigation.NavigateTo(url);
+        }
+
+        _open = false;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        HubNotifications.NotificationReceived -= OnPushAsync;
+        return ValueTask.CompletedTask;
+    }
+}

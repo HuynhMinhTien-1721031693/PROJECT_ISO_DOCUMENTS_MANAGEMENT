@@ -1,0 +1,30 @@
+﻿@page "/Error"
+@layout Layout.EmptyLayout
+@using System.Diagnostics
+
+<PageTitle>Error</PageTitle>
+
+<section class="card" style="max-width: 720px; margin: 80px auto;">
+    <h1>Có lỗi xảy ra</h1>
+    <p class="muted">Hệ thống gặp sự cố khi xử lý yêu cầu của bạn. Vui lòng thử lại hoặc liên hệ quản trị viên.</p>
+
+    @if (ShowRequestId)
+    {
+        <p style="margin-top: 10px;">
+            <strong>Request ID:</strong> <code>@RequestId</code>
+        </p>
+    }
+
+    <a class="btn-primary-link" href="/">Quay về Dashboard</a>
+</section>
+
+@code{
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private string? RequestId { get; set; }
+    private bool ShowRequestId => !string.IsNullOrEmpty(RequestId);
+
+    protected override void OnInitialized() =>
+        RequestId = Activity.Current?.Id ?? HttpContext?.TraceIdentifier;
+}

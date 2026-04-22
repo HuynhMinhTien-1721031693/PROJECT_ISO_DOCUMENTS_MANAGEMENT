@@ -1,0 +1,1508 @@
+
+
+
+ISO DMS V3
+Phần 2: Application Layer
+CQRS · MediatR Pipeline · FluentValidation · AutoMapper
+11 Source Files	3 Behaviours	Phụ thuộc Domain only
+ 
+1. Tổng quan Application Layer	3
+1.1  Cấu trúc thư mục	3
+2. MediatR Pipeline Behaviours	4
+2.1  Thứ tự thực thi và vai trò	4
+2.2  ValidationBehaviour.cs	4
+2.3  LoggingBehaviour.cs + AuthorizationBehaviour.cs	5
+3. Common Models — Result<T> và DTOs	8
+3.1  Result<T> + PagedList<T>	8
+3.2  Application Service Interfaces	9
+3.3  DTOs	10
+4. Commands (Write side)	13
+4.1  Permission codes	13
+4.2  UploadDocumentCommand — Command + Validator + Handler	13
+4.3  SubmitForApprovalCommand + RecordDecisionCommand	16
+5. Queries (Read side)	21
+6. AutoMapper — DocumentMappingProfile	25
+7. Domain Event Handlers	27
+7.1  Dispatch flow	27
+7.2  Event Handlers code	27
+8. Dependency Injection — DependencyInjection.cs	30
+8.1  Đăng ký trong Program.cs (WebAPI)	30
+
+ 
+1. Tổng quan Application Layer
+Application Layer orchestrate use cases. Mỗi use case là một Command (write) hoặc Query (read), xử lý bởi một Handler thông qua MediatR pipeline.
+
+Nguyên tắc thiết kế:
+•	Mỗi folder = một use case: Command/Query + Handler + Validator trong cùng thư mục
+•	Handler không chứa business logic — chỉ gọi Domain methods và Infrastructure services
+•	Pipeline Behaviours xử lý cross-cutting: logging, validation, authorization
+•	Không reference EF Core, Azure SDK, hoặc bất kỳ HTTP concern nào
+
+1.1  Cấu trúc thư mục
+IsoDoc.Application/
+├── Common/
+│   ├── Behaviours/
+│   │   ├── LoggingBehaviour.cs          ← Ghi log + đo thời gian mỗi request
+│   │   ├── ValidationBehaviour.cs        ← Chạy FluentValidation trước handler
+│   │   └── AuthorizationBehaviour.cs     ← Kiểm tra RBAC permission
+│   ├── Interfaces/
+│   │   └── IApplicationServices.cs       ← ICurrentUserService, IPermissionService...
+│   └── Models/
+│       ├── Result.cs                     ← Result<T> wrapper, PagedList<T>
+│       └── DocumentDtos.cs               ← DocumentDto, PendingApprovalDto...
+├── Documents/
+│   ├── Commands/
+│   │   ├── UploadDocument/               ← Command + Handler + Validator
+│   │   ├── SubmitForApproval/            ← Command + Handler + Validator
+│   │   └── RecordDecision/               ← Command + Handler + Validator
+│   ├── Queries/
+│   │   ├── GetDocumentById/
+│   │   ├── SearchDocuments/              ← Delegates to Elasticsearch
+│   │   └── GetPendingApprovals/          ← Approver inbox
+│   └── EventHandlers/
+│       └── DocumentEventHandlers.cs      ← Handlers cho Domain Events
+├── Mappings/
+│   └── DocumentMappingProfile.cs         ← AutoMapper Entity → DTO
+└── DependencyInjection.cs                ← services.AddApplicationServices()
+ 
+2. MediatR Pipeline Behaviours
+3 Behaviours đăng ký theo thứ tự: LoggingBehaviour → ValidationBehaviour → AuthorizationBehaviour → Handler. Thứ tự quan trọng: log trước, validate sau, authorize cuối cùng trước khi handler chạy.
+
+2.1  Thứ tự thực thi và vai trò
+Behaviour	Thứ tự	Vai trò
+LoggingBehaviour	1 (đầu tiên)	Ghi log request name, user, duration. Warn nếu >500ms
+ValidationBehaviour	2	Chạy tất cả IValidator<T> đã đăng ký. Throw nếu có lỗi
+AuthorizationBehaviour	3	Kiểm tra [Authorize] attribute và RBAC permission
+Handler (actual)	4 (cuối)	Business use case logic
+
+2.2  ValidationBehaviour.cs
+Validators chạy song song (Task.WhenAll) để tối ưu hiệu suất. Tất cả lỗi được thu thập trước khi throw — client nhận đủ danh sách lỗi trong một lần.
+
+using FluentValidation;
+using MediatR;
+using Microsoft.Extensions.Logging;
+
+namespace IsoDoc.Application.Common.Behaviours;
+
+/// <summary>
+/// MediatR pipeline behaviour that runs FluentValidation validators
+/// BEFORE the handler executes.
+///
+/// If any validator is registered for the request type, all validators run.
+/// On failure: throws ValidationException (caught by ExceptionHandlingMiddleware
+/// in WebAPI and mapped to HTTP 400 Problem Details).
+///
+/// No validators registered → request passes through untouched.
+/// </summary>
+public sealed class ValidationBehaviour<TRequest, TResponse>
+    : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : notnull
+{
+    private readonly IEnumerable<IValidator<TRequest>> _validators;
+    private readonly ILogger<ValidationBehaviour<TRequest, TResponse>> _logger;
+
+    public ValidationBehaviour(
+        IEnumerable<IValidator<TRequest>> validators,
+        ILogger<ValidationBehaviour<TRequest, TResponse>> logger)
+    {
+        _validators = validators;
+        _logger     = logger;
+    }
+
+    public async Task<TResponse> Handle(
+        TRequest                          request,
+        RequestHandlerDelegate<TResponse> next,
+        CancellationToken                 cancellationToken)
+    {
+        if (!_validators.Any())
+            return await next();
+
+        var context = new ValidationContext<TRequest>(request);
+
+        // Run all validators in parallel
+        var validationResults = await Task.WhenAll(
+            _validators.Select(v => v.ValidateAsync(context, cancellationToken)));
+
+        var failures = validationResults
+            .SelectMany(r => r.Errors)
+            .Where(f => f is not null)
+            .ToList();
+
+        if (failures.Any())
+        {
+            _logger.LogWarning(
+                "Validation failed for {RequestType}. Errors: {Errors}",
+                typeof(TRequest).Name,
+                string.Join("; ", failures.Select(f => $"{f.PropertyName}: {f.ErrorMessage}")));
+
+            throw new ValidationException(failures);
+        }
+
+        return await next();
+    }
+}
+
+
+2.3  LoggingBehaviour.cs + AuthorizationBehaviour.cs
+using IsoDoc.Application.Common.Interfaces;
+using MediatR;
+using Microsoft.Extensions.Logging;
+using System.Diagnostics;
+
+namespace IsoDoc.Application.Common.Behaviours;
+
+/// <summary>
+/// Logs every request: name, user, duration, and whether it succeeded.
+/// Slow requests (>500ms) are logged as warnings — helps identify N+1 queries.
+/// </summary>
+public sealed class LoggingBehaviour<TRequest, TResponse>
+    : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : notnull
+{
+    private const int SlowRequestThresholdMs = 500;
+
+    private readonly ILogger<LoggingBehaviour<TRequest, TResponse>> _logger;
+    private readonly ICurrentUserService _currentUser;
+
+    public LoggingBehaviour(
+        ILogger<LoggingBehaviour<TRequest, TResponse>> logger,
+        ICurrentUserService currentUser)
+    {
+        _logger      = logger;
+        _currentUser = currentUser;
+    }
+
+    public async Task<TResponse> Handle(
+        TRequest                          request,
+        RequestHandlerDelegate<TResponse> next,
+        CancellationToken                 cancellationToken)
+    {
+        var requestName = typeof(TRequest).Name;
+        var userId      = _currentUser.UserId?.ToString() ?? "anonymous";
+
+        _logger.LogInformation(
+            "Handling {RequestName} | User: {UserId}",
+            requestName, userId);
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var response = await next();
+            sw.Stop();
+
+            if (sw.ElapsedMilliseconds > SlowRequestThresholdMs)
+            {
+                _logger.LogWarning(
+                    "SLOW REQUEST: {RequestName} took {ElapsedMs}ms | User: {UserId}",
+                    requestName, sw.ElapsedMilliseconds, userId);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Handled {RequestName} in {ElapsedMs}ms",
+                    requestName, sw.ElapsedMilliseconds);
+            }
+
+            return response;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            _logger.LogError(ex,
+                "Error handling {RequestName} after {ElapsedMs}ms | User: {UserId}",
+                requestName, sw.ElapsedMilliseconds, userId);
+            throw;
+        }
+    }
+}
+
+/// <summary>
+/// Checks RBAC permissions before the handler runs.
+/// Requests decorated with [Authorize(Permission = "...")] are checked
+/// against the current user's role-permission set.
+///
+/// Unannotated requests pass through (public queries like search).
+/// </summary>
+public sealed class AuthorizationBehaviour<TRequest, TResponse>
+    : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : notnull
+{
+    private readonly ICurrentUserService    _currentUser;
+    private readonly IPermissionService     _permissions;
+    private readonly ILogger<AuthorizationBehaviour<TRequest, TResponse>> _logger;
+
+    public AuthorizationBehaviour(
+        ICurrentUserService    currentUser,
+        IPermissionService     permissions,
+        ILogger<AuthorizationBehaviour<TRequest, TResponse>> logger)
+    {
+        _currentUser = currentUser;
+        _permissions = permissions;
+        _logger      = logger;
+    }
+
+    public async Task<TResponse> Handle(
+        TRequest                          request,
+        RequestHandlerDelegate<TResponse> next,
+        CancellationToken                 cancellationToken)
+    {
+        // Check for [Authorize] attribute on the request class
+        var authorizeAttrs = typeof(TRequest)
+            .GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true)
+            .Cast<AuthorizeAttribute>()
+            .ToList();
+
+        if (!authorizeAttrs.Any())
+            return await next(); // No auth required
+
+        if (_currentUser.UserId is null)
+            throw new UnauthorizedAccessException("User is not authenticated.");
+
+        foreach (var attr in authorizeAttrs.Where(a => !string.IsNullOrEmpty(a.Permission)))
+        {
+            var hasPermission = await _permissions.HasPermissionAsync(
+                _currentUser.UserId.Value, attr.Permission!, cancellationToken);
+
+            if (!hasPermission)
+            {
+                _logger.LogWarning(
+                    "Authorization failed: User {UserId} missing permission '{Permission}' for {Request}",
+                    _currentUser.UserId, attr.Permission, typeof(TRequest).Name);
+
+                throw new ForbiddenAccessException(
+                    _currentUser.UserId.Value, attr.Permission!);
+            }
+        }
+
+        return await next();
+    }
+}
+
+// ── Supporting types ─────────────────────────────────────────────────────────
+
+[AttributeUsage(AttributeTargets.Class, AllowMultiple = true)]
+public sealed class AuthorizeAttribute : Attribute
+{
+    public string? Permission { get; set; }
+    public string? Role       { get; set; }
+}
+
+public sealed class ForbiddenAccessException : Exception
+{
+    public Guid   UserId     { get; }
+    public string Permission { get; }
+
+    public ForbiddenAccessException(Guid userId, string permission)
+        : base($"User '{userId}' does not have permission '{permission}'.")
+    {
+        UserId     = userId;
+        Permission = permission;
+    }
+}
+
+ 
+3. Common Models — Result<T> và DTOs
+Result<T> là envelope chứa kết quả trả về từ Handler. Thay vì throw exception cho business errors, Handler trả về Result.Failure(). Exception chỉ throw cho lỗi ngoài kiểm soát (DB down, network fail).
+
+3.1  Result<T> + PagedList<T>
+namespace IsoDoc.Application.Common.Models;
+
+/// <summary>
+/// Generic result wrapper. All command/query handlers return this
+/// instead of throwing exceptions — callers decide how to handle errors.
+/// </summary>
+public class Result<T>
+{
+    public bool     IsSuccess  { get; }
+    public T?       Value      { get; }
+    public string?  Error      { get; }
+    public string?  ErrorCode  { get; }
+
+    private Result(bool isSuccess, T? value, string? error, string? errorCode)
+    {
+        IsSuccess = isSuccess;
+        Value     = value;
+        Error     = error;
+        ErrorCode = errorCode;
+    }
+
+    public static Result<T> Success(T value)
+        => new(true, value, null, null);
+
+    public static Result<T> Failure(string error, string errorCode = "GENERAL_ERROR")
+        => new(false, default, error, errorCode);
+
+    public static implicit operator Result<T>(T value) => Success(value);
+}
+
+/// <summary>Non-generic result for commands that return no value.</summary>
+public class Result
+{
+    public bool    IsSuccess { get; }
+    public string? Error     { get; }
+    public string? ErrorCode { get; }
+
+    private Result(bool isSuccess, string? error, string? errorCode)
+    {
+        IsSuccess = isSuccess;
+        Error     = error;
+        ErrorCode = errorCode;
+    }
+
+    public static Result Success()
+        => new(true, null, null);
+
+    public static Result Failure(string error, string errorCode = "GENERAL_ERROR")
+        => new(false, error, errorCode);
+}
+
+/// <summary>
+/// Standard paged list for query results. 
+/// Used by SearchDocumentsQuery, GetPendingApprovalsQuery, etc.
+/// </summary>
+public class PagedList<T>
+{
+    public IReadOnlyList<T> Items     { get; }
+    public int              Page      { get; }
+    public int              PageSize  { get; }
+    public int              TotalCount { get; }
+    public int              TotalPages => (int)Math.Ceiling(TotalCount / (double)PageSize);
+    public bool             HasNextPage => Page < TotalPages;
+    public bool             HasPreviousPage => Page > 1;
+
+    public PagedList(IReadOnlyList<T> items, int totalCount, int page, int pageSize)
+    {
+        Items      = items;
+        TotalCount = totalCount;
+        Page       = page;
+        PageSize   = pageSize;
+    }
+}
+
+
+3.2  Application Service Interfaces
+ICurrentUserService và IPermissionService được implement trong Infrastructure (WebAPI injects HttpContext). Application layer chỉ phụ thuộc vào interfaces — không biết JWT hay Cookie tồn tại.
+
+namespace IsoDoc.Application.Common.Interfaces;
+
+/// <summary>
+/// Provides the currently authenticated user's identity to the Application layer.
+/// Implemented in WebAPI project via HttpContext / JWT claims.
+/// Injected into pipeline behaviours and handlers.
+/// </summary>
+public interface ICurrentUserService
+{
+    Guid?   UserId     { get; }
+    string? Email      { get; }
+    string? FullName   { get; }
+    bool    IsAuthenticated { get; }
+
+    /// <summary>IDs of roles currently assigned to the user.</summary>
+    IReadOnlyList<string> Roles { get; }
+}
+
+/// <summary>
+/// RBAC permission check service.
+/// Implemented in Infrastructure — caches role-permission maps in Redis.
+/// </summary>
+public interface IPermissionService
+{
+    Task<bool> HasPermissionAsync(
+        Guid   userId,
+        string permissionCode,
+        CancellationToken ct = default);
+
+    Task<IReadOnlyList<string>> GetUserPermissionsAsync(
+        Guid   userId,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Email / in-app notification dispatcher.
+/// Implemented in Infrastructure — delegates to SendGrid / SignalR hub.
+/// </summary>
+public interface INotificationSender
+{
+    Task SendEmailAsync(
+        string toEmail,
+        string subject,
+        string htmlBody,
+        CancellationToken ct = default);
+
+    Task SendInAppNotificationAsync(
+        Guid   userId,
+        string title,
+        string message,
+        string? actionUrl = null,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Permission codes used across commands and behaviours.
+/// Centralised here to avoid magic strings.
+/// </summary>
+public static class Permissions
+{
+    public const string DocumentUpload       = "document:upload";
+    public const string DocumentEdit         = "document:edit";
+    public const string DocumentDelete       = "document:delete";
+    public const string DocumentSubmit       = "document:submit";
+    public const string DocumentApprove      = "document:approve";
+    public const string DocumentArchive      = "document:archive";
+    public const string DocumentViewAll      = "document:view_all";
+    public const string WorkflowViewPending  = "workflow:view_pending";
+    public const string UserManage           = "user:manage";
+    public const string RoleAssign           = "role:assign";
+    public const string AuditLogView         = "audit:view";
+}
+
+
+3.3  DTOs
+DTOs là sealed records — immutable, value equality. Không dùng class vì DTOs không có identity, chỉ truyền data. init-only properties đảm bảo không bị modify sau khi tạo.
+
+namespace IsoDoc.Application.Common.Models;
+
+// ── Document DTOs ─────────────────────────────────────────────────────────────
+
+/// <summary>Full document detail — returned by GetDocumentByIdQuery.</summary>
+public sealed record DocumentDto
+{
+    public Guid     Id              { get; init; }
+    public string   Title           { get; init; } = string.Empty;
+    public string   DocumentCode    { get; init; } = string.Empty;
+    public string   IsoStandard     { get; init; } = string.Empty;
+    public string   Category        { get; init; } = string.Empty;
+    public string   Status          { get; init; } = string.Empty;
+    public string   CurrentVersion  { get; init; } = string.Empty;
+    public string?  Description     { get; init; }
+    public IReadOnlyList<string> Tags { get; init; } = Array.Empty<string>();
+    public Guid     OwnerId         { get; init; }
+    public string   OwnerName       { get; init; } = string.Empty;
+    public string   DepartmentName  { get; init; } = string.Empty;
+    public DateTime CreatedAt       { get; init; }
+    public DateTime UpdatedAt       { get; init; }
+
+    // Populated when versions are included
+    public IReadOnlyList<DocumentVersionDto> Versions { get; init; } = Array.Empty<DocumentVersionDto>();
+
+    // Active workflow (if any)
+    public WorkflowStatusDto? ActiveWorkflow { get; init; }
+}
+
+/// <summary>Compact list item — returned by SearchDocumentsQuery.</summary>
+public sealed record DocumentSummaryDto
+{
+    public Guid     Id              { get; init; }
+    public string   Title           { get; init; } = string.Empty;
+    public string   DocumentCode    { get; init; } = string.Empty;
+    public string   IsoStandard     { get; init; } = string.Empty;
+    public string   Category        { get; init; } = string.Empty;
+    public string   Status          { get; init; } = string.Empty;
+    public string   CurrentVersion  { get; init; } = string.Empty;
+    public string   OwnerName       { get; init; } = string.Empty;
+    public DateTime UpdatedAt       { get; init; }
+    public IReadOnlyList<string> HighlightedFragments { get; init; } = Array.Empty<string>();
+}
+
+/// <summary>Document version detail.</summary>
+public sealed record DocumentVersionDto
+{
+    public Guid     Id               { get; init; }
+    public string   BlobPath         { get; init; } = string.Empty;
+    public string   FileType         { get; init; } = string.Empty;
+    public string   FileSizeFormatted { get; init; } = string.Empty;
+    public string?  ChangeNote       { get; init; }
+    public string   UploadedByName   { get; init; } = string.Empty;
+    public DateTime UploadedAt       { get; init; }
+    public bool     IsCurrentVersion { get; init; }
+}
+
+// ── Workflow DTOs ─────────────────────────────────────────────────────────────
+
+/// <summary>Workflow state summary.</summary>
+public sealed record WorkflowStatusDto
+{
+    public Guid     WorkflowId       { get; init; }
+    public string   Status           { get; init; } = string.Empty;
+    public int      CurrentStepOrder { get; init; }
+    public int      TotalSteps       { get; init; }
+    public string?  CurrentApproverName { get; init; }
+    public DateTime StartedAt        { get; init; }
+    public DateTime? CompletedAt     { get; init; }
+    public IReadOnlyList<ApprovalStepDto> Steps { get; init; } = Array.Empty<ApprovalStepDto>();
+}
+
+/// <summary>Single approval step detail.</summary>
+public sealed record ApprovalStepDto
+{
+    public int      StepOrder    { get; init; }
+    public string   ApproverName { get; init; } = string.Empty;
+    public string   Decision     { get; init; } = string.Empty;
+    public string?  Comment      { get; init; }
+    public DateTime? DecidedAt   { get; init; }
+}
+
+/// <summary>Pending approval item for the approver's inbox.</summary>
+public sealed record PendingApprovalDto
+{
+    public Guid     WorkflowId       { get; init; }
+    public Guid     DocumentId       { get; init; }
+    public string   DocumentCode     { get; init; } = string.Empty;
+    public string   DocumentTitle    { get; init; } = string.Empty;
+    public string   IsoStandard      { get; init; } = string.Empty;
+    public string   SubmittedByName  { get; init; } = string.Empty;
+    public DateTime SubmittedAt      { get; init; }
+    public int      StepOrder        { get; init; }
+    public int      TotalSteps       { get; init; }
+    public int      DaysWaiting      => (int)(DateTime.UtcNow - SubmittedAt).TotalDays;
+}
+
+ 
+4. Commands (Write side)
+Mỗi Command bao gồm 3 class trong cùng thư mục: Command record (request), Validator (FluentValidation), Handler (orchestration).
+
+4.1  Permission codes
+Permission code	Áp dụng cho role
+document:upload	DocumentController, ISOManager, SystemAdmin
+document:submit	DocumentController, ISOManager, SystemAdmin
+document:approve	QAOfficer, SafetyOfficer, ISMSOfficer, ISOManager
+document:archive	ISOManager, SystemAdmin
+document:view_all	Tất cả roles
+audit:view	ISOManager, SystemAdmin
+
+4.2  UploadDocumentCommand — Command + Validator + Handler
+Handler không throw exception cho business errors. Trả về Result.Failure() để WebAPI layer map sang HTTP 400/409. Chỉ exception thực sự (file upload I/O fail) được catch và wrap thành Result.Failure().
+
+using FluentValidation;
+using IsoDoc.Application.Common.Behaviours;
+using IsoDoc.Application.Common.Interfaces;
+using IsoDoc.Application.Common.Models;
+using IsoDoc.Domain.Entities;
+using IsoDoc.Domain.Enums;
+using IsoDoc.Domain.Interfaces;
+using IsoDoc.Domain.ValueObjects;
+using MediatR;
+using Microsoft.Extensions.Logging;
+
+namespace IsoDoc.Application.Documents.Commands.UploadDocument;
+
+// ── Command ──────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Creates a new Document in Draft status and uploads the initial file to Blob Storage.
+/// Returns the created document's ID.
+/// </summary>
+[Authorize(Permission = Permissions.DocumentUpload)]
+public sealed record UploadDocumentCommand : IRequest<Result<Guid>>
+{
+    public string            Title        { get; init; } = string.Empty;
+    public string            DocumentCode { get; init; } = string.Empty;
+    public IsoStandard       Standard     { get; init; }
+    public DocumentCategory  Category     { get; init; }
+    public string?           Description  { get; init; }
+    public IList<string>     Tags         { get; init; } = new List<string>();
+
+    // File upload data
+    public Stream            FileStream   { get; init; } = Stream.Null;
+    public string            FileName     { get; init; } = string.Empty;
+    public string            ContentType  { get; init; } = string.Empty;
+    public long              FileSize     { get; init; }
+    public string            ChecksumHex  { get; init; } = string.Empty; // SHA-256 computed by client
+    public string?           ChangeNote   { get; init; }
+}
+
+// ── Validator ────────────────────────────────────────────────────────────────
+
+public sealed class UploadDocumentCommandValidator : AbstractValidator<UploadDocumentCommand>
+{
+    private static readonly string[] AllowedContentTypes =
+        ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"];
+
+    private const long MaxFileSizeBytes = 50 * 1024 * 1024; // 50 MB
+
+    public UploadDocumentCommandValidator()
+    {
+        RuleFor(x => x.Title)
+            .NotEmpty().WithMessage("Tiêu đề tài liệu không được để trống.")
+            .MaximumLength(500).WithMessage("Tiêu đề không quá 500 ký tự.");
+
+        RuleFor(x => x.DocumentCode)
+            .NotEmpty().WithMessage("Mã tài liệu không được để trống.")
+            .Matches(@"^[A-Z]{2,6}-[A-Z]{2,4}-\d{3}$")
+            .WithMessage("Mã tài liệu phải theo định dạng: PREFIX-TYPE-NNN (ví dụ: QMS-PR-001).");
+
+        RuleFor(x => x.Standard)
+            .IsInEnum().WithMessage("Tiêu chuẩn ISO không hợp lệ.");
+
+        RuleFor(x => x.Category)
+            .IsInEnum().WithMessage("Phân loại tài liệu không hợp lệ.");
+
+        RuleFor(x => x.FileName)
+            .NotEmpty().WithMessage("Tên file không được để trống.");
+
+        RuleFor(x => x.ContentType)
+            .Must(ct => AllowedContentTypes.Contains(ct))
+            .WithMessage("Chỉ chấp nhận file PDF, DOCX hoặc XLSX.");
+
+        RuleFor(x => x.FileSize)
+            .GreaterThan(0).WithMessage("File không được rỗng.")
+            .LessThanOrEqualTo(MaxFileSizeBytes)
+            .WithMessage($"Dung lượng file không vượt quá {MaxFileSizeBytes / 1024 / 1024} MB.");
+
+        RuleFor(x => x.ChecksumHex)
+            .NotEmpty().WithMessage("Checksum SHA-256 bắt buộc phải có.")
+            .Length(64).WithMessage("Checksum phải là chuỗi hex 64 ký tự (SHA-256).");
+
+        RuleFor(x => x.Tags)
+            .Must(tags => tags.Count <= 10).WithMessage("Tối đa 10 tags.")
+            .ForEach(tag => tag.MaximumLength(50).WithMessage("Mỗi tag tối đa 50 ký tự."));
+    }
+}
+
+// ── Handler ───────────────────────────────────────────────────────────────────
+
+public sealed class UploadDocumentCommandHandler
+    : IRequestHandler<UploadDocumentCommand, Result<Guid>>
+{
+    private readonly IDocumentRepository  _documents;
+    private readonly IFileStorageService  _fileStorage;
+    private readonly ICurrentUserService  _currentUser;
+    private readonly IAuditService        _audit;
+    private readonly ILogger<UploadDocumentCommandHandler> _logger;
+
+    public UploadDocumentCommandHandler(
+        IDocumentRepository  documents,
+        IFileStorageService  fileStorage,
+        ICurrentUserService  currentUser,
+        IAuditService        audit,
+        ILogger<UploadDocumentCommandHandler> logger)
+    {
+        _documents   = documents;
+        _fileStorage = fileStorage;
+        _currentUser = currentUser;
+        _audit       = audit;
+        _logger      = logger;
+    }
+
+    public async Task<Result<Guid>> Handle(
+        UploadDocumentCommand command,
+        CancellationToken     ct)
+    {
+        // 1. Check for duplicate document code
+        if (await _documents.ExistsAsync(command.DocumentCode, ct))
+            return Result<Guid>.Failure(
+                $"Mã tài liệu '{command.DocumentCode}' đã tồn tại trong hệ thống.",
+                "DOCUMENT_CODE_DUPLICATE");
+
+        var ownerId = _currentUser.UserId!.Value;
+
+        // 2. Create domain entity (raises DocumentCreatedEvent)
+        var document = Document.Create(
+            title:        command.Title,
+            code:         command.DocumentCode,
+            standard:     command.Standard,
+            category:     command.Category,
+            ownerId:      ownerId,
+            departmentId: Guid.Empty, // TODO: resolve from user's department
+            description:  command.Description,
+            tags:         command.Tags);
+
+        // 3. Upload file to Blob Storage
+        string blobPath;
+        try
+        {
+            blobPath = await _fileStorage.UploadAsync(
+                fileStream:  command.FileStream,
+                fileName:    command.FileName,
+                contentType: command.ContentType,
+                documentId:  document.Id,
+                ct:          ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "File upload failed for document {Code}", command.DocumentCode);
+            return Result<Guid>.Failure(
+                "Lỗi khi tải file lên. Vui lòng thử lại.",
+                "FILE_UPLOAD_FAILED");
+        }
+
+        // 4. Add version to aggregate
+        var fileType = command.ContentType switch
+        {
+            "application/pdf" => DocumentFileType.Pdf,
+            var ct2 when ct2.Contains("wordprocessingml") => DocumentFileType.Docx,
+            var ct2 when ct2.Contains("spreadsheetml")    => DocumentFileType.Xlsx,
+            _ => DocumentFileType.Pdf
+        };
+
+        document.AddVersion(
+            blobPath:    blobPath,
+            fileSize:    command.FileSize,
+            fileType:    fileType,
+            checksumHex: command.ChecksumHex,
+            uploadedBy:  ownerId,
+            changeNote:  command.ChangeNote);
+
+        // 5. Persist
+        await _documents.AddAsync(document, ct);
+        await _documents.SaveChangesAsync(ct);
+        // Domain events dispatched by EF Core SaveChanges interceptor
+
+        // 6. Audit log (ISO 27001)
+        await _audit.LogAsync(
+            userId:     ownerId,
+            action:     "Document.Upload",
+            entityType: "Document",
+            entityId:   document.Id.ToString(),
+            newValues:  new { document.Id, document.Code, command.FileName },
+            ct:         ct);
+
+        _logger.LogInformation(
+            "Document created: {Code} by user {UserId}", document.Code, ownerId);
+
+        return Result<Guid>.Success(document.Id);
+    }
+}
+
+
+4.3  SubmitForApprovalCommand + RecordDecisionCommand
+RecordDecisionCommand xử lý cả Approve và Reject trong một handler. Workflow aggregate tự biết cần advance hay complete dựa trên state machine nội tại.
+
+using FluentValidation;
+using IsoDoc.Application.Common.Behaviours;
+using IsoDoc.Application.Common.Interfaces;
+using IsoDoc.Application.Common.Models;
+using IsoDoc.Domain.Entities;
+using IsoDoc.Domain.Enums;
+using IsoDoc.Domain.Interfaces;
+using MediatR;
+using Microsoft.Extensions.Logging;
+
+namespace IsoDoc.Application.Documents.Commands.SubmitForApproval;
+
+// ════════════════════════════════════════════════════════════════════════════
+// SubmitForApprovalCommand
+// ════════════════════════════════════════════════════════════════════════════
+
+[Authorize(Permission = Permissions.DocumentSubmit)]
+public sealed record SubmitForApprovalCommand(Guid DocumentId) : IRequest<Result<Guid>>;
+
+public sealed class SubmitForApprovalCommandValidator
+    : AbstractValidator<SubmitForApprovalCommand>
+{
+    public SubmitForApprovalCommandValidator()
+    {
+        RuleFor(x => x.DocumentId)
+            .NotEmpty().WithMessage("DocumentId không được để trống.");
+    }
+}
+
+public sealed class SubmitForApprovalCommandHandler
+    : IRequestHandler<SubmitForApprovalCommand, Result<Guid>>
+{
+    private readonly IDocumentRepository          _documents;
+    private readonly IApprovalWorkflowRepository  _workflows;
+    private readonly ICurrentUserService          _currentUser;
+    private readonly IAuditService                _audit;
+    private readonly ILogger<SubmitForApprovalCommandHandler> _logger;
+
+    // In a real system these would come from a WorkflowConfigService
+    // that resolves the correct approver IDs based on the document's ISO standard.
+    // For now they are injected as named dependencies.
+    private readonly IApproverResolverService _approverResolver;
+
+    public SubmitForApprovalCommandHandler(
+        IDocumentRepository          documents,
+        IApprovalWorkflowRepository  workflows,
+        ICurrentUserService          currentUser,
+        IAuditService                audit,
+        IApproverResolverService     approverResolver,
+        ILogger<SubmitForApprovalCommandHandler> logger)
+    {
+        _documents        = documents;
+        _workflows        = workflows;
+        _currentUser      = currentUser;
+        _audit            = audit;
+        _approverResolver = approverResolver;
+        _logger           = logger;
+    }
+
+    public async Task<Result<Guid>> Handle(
+        SubmitForApprovalCommand command,
+        CancellationToken        ct)
+    {
+        var document = await _documents.GetByIdAsync(command.DocumentId, ct);
+        if (document is null)
+            return Result<Guid>.Failure(
+                $"Không tìm thấy tài liệu '{command.DocumentId}'.",
+                "DOCUMENT_NOT_FOUND");
+
+        var userId = _currentUser.UserId!.Value;
+
+        // Only owner or Controller role can submit
+        if (document.OwnerId != userId)
+            return Result<Guid>.Failure(
+                "Chỉ chủ sở hữu tài liệu mới có thể gửi phê duyệt.",
+                "UNAUTHORIZED");
+
+        // Resolve the two approvers for this standard
+        var (step1ApproverId, step2ApproverId) =
+            await _approverResolver.ResolveAsync(document.Standard, ct);
+
+        // Transition document state
+        document.SubmitForReview(userId);
+
+        // Create approval workflow
+        var workflow = ApprovalWorkflow.Create(
+            documentId:      document.Id,
+            versionId:       document.Versions.OrderByDescending(v => v.UploadedAt).First().Id,
+            step1ApproverId: step1ApproverId,
+            step2ApproverId: step2ApproverId);
+
+        await _workflows.AddAsync(workflow, ct);
+        _documents.Update(document);
+        await _documents.SaveChangesAsync(ct);
+
+        await _audit.LogAsync(userId, "Document.SubmitForApproval",
+            "Document", document.Id.ToString(), ct: ct);
+
+        _logger.LogInformation(
+            "Document {Code} submitted for approval by {UserId}", document.Code, userId);
+
+        return Result<Guid>.Success(workflow.Id);
+    }
+}
+
+// ── Approver resolver port (implemented in Infrastructure) ───────────────────
+public interface IApproverResolverService
+{
+    Task<(Guid Step1ApproverId, Guid Step2ApproverId)> ResolveAsync(
+        IsoStandard standard, CancellationToken ct = default);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// RecordDecisionCommand  (Approve or Reject a workflow step)
+// ════════════════════════════════════════════════════════════════════════════
+
+[Authorize(Permission = Permissions.DocumentApprove)]
+public sealed record RecordDecisionCommand : IRequest<Result>
+{
+    public Guid             WorkflowId { get; init; }
+    public WorkflowDecision Decision   { get; init; }
+    public string?          Comment    { get; init; }
+}
+
+public sealed class RecordDecisionCommandValidator
+    : AbstractValidator<RecordDecisionCommand>
+{
+    public RecordDecisionCommandValidator()
+    {
+        RuleFor(x => x.WorkflowId)
+            .NotEmpty().WithMessage("WorkflowId không được để trống.");
+
+        RuleFor(x => x.Decision)
+            .Must(d => d is WorkflowDecision.Approved or WorkflowDecision.Rejected)
+            .WithMessage("Decision phải là Approved hoặc Rejected.");
+
+        RuleFor(x => x.Comment)
+            .NotEmpty().When(x => x.Decision == WorkflowDecision.Rejected)
+            .WithMessage("Bắt buộc phải nhập lý do khi từ chối.");
+
+        RuleFor(x => x.Comment)
+            .MaximumLength(2000).When(x => x.Comment is not null)
+            .WithMessage("Comment không quá 2000 ký tự.");
+    }
+}
+
+public sealed class RecordDecisionCommandHandler
+    : IRequestHandler<RecordDecisionCommand, Result>
+{
+    private readonly IApprovalWorkflowRepository _workflows;
+    private readonly IDocumentRepository         _documents;
+    private readonly ICurrentUserService         _currentUser;
+    private readonly IAuditService               _audit;
+    private readonly ILogger<RecordDecisionCommandHandler> _logger;
+
+    public RecordDecisionCommandHandler(
+        IApprovalWorkflowRepository workflows,
+        IDocumentRepository         documents,
+        ICurrentUserService         currentUser,
+        IAuditService               audit,
+        ILogger<RecordDecisionCommandHandler> logger)
+    {
+        _workflows   = workflows;
+        _documents   = documents;
+        _currentUser = currentUser;
+        _audit       = audit;
+        _logger      = logger;
+    }
+
+    public async Task<Result> Handle(RecordDecisionCommand command, CancellationToken ct)
+    {
+        var workflow = await _workflows.GetByDocumentIdAsync(command.WorkflowId, ct);
+        if (workflow is null)
+            return Result.Failure("Không tìm thấy workflow.", "WORKFLOW_NOT_FOUND");
+
+        var document = await _documents.GetByIdAsync(workflow.DocumentId, ct);
+        if (document is null)
+            return Result.Failure("Không tìm thấy tài liệu.", "DOCUMENT_NOT_FOUND");
+
+        var userId = _currentUser.UserId!.Value;
+
+        // Workflow records the decision (validates approver identity internally)
+        workflow.RecordDecision(userId, command.Decision, command.Comment);
+
+        // Sync document state based on workflow outcome
+        if (workflow.Status == WorkflowStatus.Approved)
+        {
+            document.Publish(userId, isMajorChange: false);
+        }
+        else if (workflow.Status == WorkflowStatus.Rejected)
+        {
+            document.Reject(userId, command.Comment ?? "No reason provided.");
+        }
+        else
+        {
+            // Still in progress — advance document to PendingFinalApproval
+            if (workflow.CurrentStepOrder == 2)
+                document.AdvanceToFinalApproval(userId);
+        }
+
+        _workflows.Update(workflow);
+        _documents.Update(document);
+        await _documents.SaveChangesAsync(ct);
+
+        var action = command.Decision == WorkflowDecision.Approved
+            ? "Workflow.Approved" : "Workflow.Rejected";
+
+        await _audit.LogAsync(userId, action, "ApprovalWorkflow",
+            workflow.Id.ToString(),
+            newValues: new { command.Decision, command.Comment }, ct: ct);
+
+        _logger.LogInformation(
+            "Workflow {WorkflowId} step {Step}: {Decision} by {UserId}",
+            workflow.Id, workflow.CurrentStepOrder, command.Decision, userId);
+
+        return Result.Success();
+    }
+}
+
+ 
+5. Queries (Read side)
+Queries không thay đổi state. SearchDocumentsQuery delegate cho Elasticsearch — không query SQL trực tiếp. GetPendingApprovalsQuery trả về danh sách sắp xếp theo SubmittedAt (oldest first = most urgent).
+
+using FluentValidation;
+using IsoDoc.Application.Common.Models;
+using IsoDoc.Domain.Enums;
+using IsoDoc.Domain.Interfaces;
+using MediatR;
+using AutoMapper;
+
+namespace IsoDoc.Application.Documents.Queries;
+
+// ════════════════════════════════════════════════════════════════════════════
+// GetDocumentByIdQuery
+// ════════════════════════════════════════════════════════════════════════════
+
+public sealed record GetDocumentByIdQuery(Guid DocumentId, bool IncludeVersions = true)
+    : IRequest<Result<DocumentDto>>;
+
+public sealed class GetDocumentByIdQueryHandler
+    : IRequestHandler<GetDocumentByIdQuery, Result<DocumentDto>>
+{
+    private readonly IDocumentRepository _documents;
+    private readonly IMapper             _mapper;
+
+    public GetDocumentByIdQueryHandler(IDocumentRepository documents, IMapper mapper)
+    {
+        _documents = documents;
+        _mapper    = mapper;
+    }
+
+    public async Task<Result<DocumentDto>> Handle(
+        GetDocumentByIdQuery query, CancellationToken ct)
+    {
+        var document = await _documents.GetByIdAsync(query.DocumentId, ct);
+        if (document is null)
+            return Result<DocumentDto>.Failure(
+                $"Không tìm thấy tài liệu '{query.DocumentId}'.",
+                "DOCUMENT_NOT_FOUND");
+
+        return Result<DocumentDto>.Success(_mapper.Map<DocumentDto>(document));
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// SearchDocumentsQuery  — full-text + filter with paging
+// ════════════════════════════════════════════════════════════════════════════
+
+public sealed record SearchDocumentsQuery : IRequest<Result<PagedList<DocumentSummaryDto>>>
+{
+    public string?           Keyword    { get; init; }
+    public IsoStandard?      Standard   { get; init; }
+    public DocumentStatus?   Status     { get; init; }
+    public DocumentCategory? Category   { get; init; }
+    public Guid?             OwnerId    { get; init; }
+    public DateTime?         FromDate   { get; init; }
+    public DateTime?         ToDate     { get; init; }
+    public int               Page       { get; init; } = 1;
+    public int               PageSize   { get; init; } = 20;
+    public string            SortBy     { get; init; } = "UpdatedAt";
+    public bool              SortDesc   { get; init; } = true;
+}
+
+public sealed class SearchDocumentsQueryValidator
+    : AbstractValidator<SearchDocumentsQuery>
+{
+    public SearchDocumentsQueryValidator()
+    {
+        RuleFor(x => x.Page)
+            .GreaterThanOrEqualTo(1).WithMessage("Page phải >= 1.");
+
+        RuleFor(x => x.PageSize)
+            .InclusiveBetween(1, 100).WithMessage("PageSize phải từ 1 đến 100.");
+
+        RuleFor(x => x.Keyword)
+            .MaximumLength(200).When(x => x.Keyword is not null)
+            .WithMessage("Từ khóa tìm kiếm không quá 200 ký tự.");
+
+        RuleFor(x => x)
+            .Must(x => x.FromDate is null || x.ToDate is null || x.FromDate <= x.ToDate)
+            .WithMessage("FromDate phải trước hoặc bằng ToDate.");
+
+        RuleFor(x => x.SortBy)
+            .Must(s => new[] { "UpdatedAt","CreatedAt","Title","DocumentCode","Status" }.Contains(s))
+            .WithMessage("SortBy không hợp lệ.");
+    }
+}
+
+public sealed class SearchDocumentsQueryHandler
+    : IRequestHandler<SearchDocumentsQuery, Result<PagedList<DocumentSummaryDto>>>
+{
+    private readonly ISearchService _searchService;
+    private readonly IMapper        _mapper;
+
+    public SearchDocumentsQueryHandler(ISearchService searchService, IMapper mapper)
+    {
+        _searchService = searchService;
+        _mapper        = mapper;
+    }
+
+    public async Task<Result<PagedList<DocumentSummaryDto>>> Handle(
+        SearchDocumentsQuery query, CancellationToken ct)
+    {
+        // Delegate to Elasticsearch via domain interface
+        var searchQuery = new SearchQuery(
+            Keyword:  query.Keyword,
+            Standard: query.Standard,
+            Status:   query.Status,
+            Category: query.Category,
+            OwnerId:  query.OwnerId,
+            FromDate: query.FromDate,
+            ToDate:   query.ToDate,
+            Page:     query.Page,
+            PageSize: query.PageSize);
+
+        var result = await _searchService.SearchAsync(searchQuery, ct);
+
+        var items = result.Hits
+            .Select(hit => new DocumentSummaryDto
+            {
+                Id           = hit.DocumentId,
+                DocumentCode = hit.DocumentCode,
+                Title        = hit.Title,
+                Status       = hit.Status,
+                IsoStandard  = hit.Standard,
+                HighlightedFragments = hit.Highlights
+            })
+            .ToList();
+
+        var paged = new PagedList<DocumentSummaryDto>(
+            items, result.TotalCount, query.Page, query.PageSize);
+
+        return Result<PagedList<DocumentSummaryDto>>.Success(paged);
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// GetPendingApprovalsQuery  — approver's inbox
+// ════════════════════════════════════════════════════════════════════════════
+
+public sealed record GetPendingApprovalsQuery(
+    Guid ApprovedId,
+    int  Page     = 1,
+    int  PageSize = 20
+) : IRequest<Result<PagedList<PendingApprovalDto>>>;
+
+public sealed class GetPendingApprovalsQueryHandler
+    : IRequestHandler<GetPendingApprovalsQuery, Result<PagedList<PendingApprovalDto>>>
+{
+    private readonly IApprovalWorkflowRepository _workflows;
+    private readonly IDocumentRepository         _documents;
+    private readonly IMapper                     _mapper;
+
+    public GetPendingApprovalsQueryHandler(
+        IApprovalWorkflowRepository workflows,
+        IDocumentRepository         documents,
+        IMapper                     mapper)
+    {
+        _workflows = workflows;
+        _documents = documents;
+        _mapper    = mapper;
+    }
+
+    public async Task<Result<PagedList<PendingApprovalDto>>> Handle(
+        GetPendingApprovalsQuery query, CancellationToken ct)
+    {
+        var pending = await _workflows.GetPendingForApproverAsync(query.ApprovedId, ct);
+
+        var items = new List<PendingApprovalDto>();
+        foreach (var wf in pending)
+        {
+            var doc = await _documents.GetByIdAsync(wf.DocumentId, ct);
+            if (doc is null) continue;
+
+            var currentStep = wf.CurrentStep;
+            items.Add(new PendingApprovalDto
+            {
+                WorkflowId      = wf.Id,
+                DocumentId      = doc.Id,
+                DocumentCode    = doc.Code,
+                DocumentTitle   = doc.Title,
+                IsoStandard     = doc.Standard.ToString(),
+                SubmittedAt     = wf.StartedAt,
+                StepOrder       = wf.CurrentStepOrder,
+                TotalSteps      = wf.Steps.Count,
+            });
+        }
+
+        // Sort by oldest first (most urgent)
+        items = items.OrderBy(x => x.SubmittedAt).ToList();
+
+        var totalCount = items.Count;
+        var paged = items
+            .Skip((query.Page - 1) * query.PageSize)
+            .Take(query.PageSize)
+            .ToList();
+
+        return Result<PagedList<PendingApprovalDto>>.Success(
+            new PagedList<PendingApprovalDto>(paged, totalCount, query.Page, query.PageSize));
+    }
+}
+
+ 
+6. AutoMapper — DocumentMappingProfile
+Profile được scan tự động khi gọi services.AddAutoMapper(assembly). Các field cần join với bảng khác (OwnerName, DepartmentName) được Ignore() — handler tự resolve riêng hoặc dùng projection.
+
+using AutoMapper;
+using IsoDoc.Application.Common.Models;
+using IsoDoc.Domain.Entities;
+
+namespace IsoDoc.Application.Mappings;
+
+/// <summary>
+/// AutoMapper profile: Domain entities → DTOs.
+/// Registered once in DI at startup; used across all query handlers.
+/// </summary>
+public sealed class DocumentMappingProfile : Profile
+{
+    public DocumentMappingProfile()
+    {
+        // Document → DocumentDto
+        CreateMap<Document, DocumentDto>()
+            .ForMember(dst => dst.DocumentCode,
+                opt => opt.MapFrom(src => src.Code.Value))
+            .ForMember(dst => dst.IsoStandard,
+                opt => opt.MapFrom(src => src.Standard.ToString()))
+            .ForMember(dst => dst.Category,
+                opt => opt.MapFrom(src => src.Category.ToString()))
+            .ForMember(dst => dst.Status,
+                opt => opt.MapFrom(src => src.Status.ToString()))
+            .ForMember(dst => dst.CurrentVersion,
+                opt => opt.MapFrom(src => src.CurrentVersion.ToString()))
+            .ForMember(dst => dst.OwnerName,
+                opt => opt.Ignore())          // Resolved separately from Users table
+            .ForMember(dst => dst.DepartmentName,
+                opt => opt.Ignore())          // Resolved separately
+            .ForMember(dst => dst.ActiveWorkflow,
+                opt => opt.Ignore());         // Resolved separately from Workflow repo
+
+        // Document → DocumentSummaryDto (compact)
+        CreateMap<Document, DocumentSummaryDto>()
+            .ForMember(dst => dst.DocumentCode,
+                opt => opt.MapFrom(src => src.Code.Value))
+            .ForMember(dst => dst.IsoStandard,
+                opt => opt.MapFrom(src => src.Standard.ToString()))
+            .ForMember(dst => dst.Category,
+                opt => opt.MapFrom(src => src.Category.ToString()))
+            .ForMember(dst => dst.Status,
+                opt => opt.MapFrom(src => src.Status.ToString()))
+            .ForMember(dst => dst.CurrentVersion,
+                opt => opt.MapFrom(src => src.CurrentVersion.ToString()))
+            .ForMember(dst => dst.OwnerName,
+                opt => opt.Ignore())
+            .ForMember(dst => dst.HighlightedFragments,
+                opt => opt.Ignore());
+
+        // DocumentVersion → DocumentVersionDto
+        CreateMap<DocumentVersion, DocumentVersionDto>()
+            .ForMember(dst => dst.FileType,
+                opt => opt.MapFrom(src => src.FileType.ToString()))
+            .ForMember(dst => dst.FileSizeFormatted,
+                opt => opt.MapFrom(src => src.FileSizeFormatted))
+            .ForMember(dst => dst.UploadedByName,
+                opt => opt.Ignore());
+
+        // ApprovalWorkflow → WorkflowStatusDto
+        CreateMap<ApprovalWorkflow, WorkflowStatusDto>()
+            .ForMember(dst => dst.WorkflowId,
+                opt => opt.MapFrom(src => src.Id))
+            .ForMember(dst => dst.Status,
+                opt => opt.MapFrom(src => src.Status.ToString()))
+            .ForMember(dst => dst.TotalSteps,
+                opt => opt.MapFrom(src => src.Steps.Count))
+            .ForMember(dst => dst.CurrentApproverName,
+                opt => opt.Ignore());
+
+        // ApprovalStep → ApprovalStepDto
+        CreateMap<ApprovalStep, ApprovalStepDto>()
+            .ForMember(dst => dst.Decision,
+                opt => opt.MapFrom(src => src.Decision.ToString()))
+            .ForMember(dst => dst.ApproverName,
+                opt => opt.Ignore());
+    }
+}
+
+ 
+7. Domain Event Handlers
+Handlers implement INotificationHandler<TEvent> và được dispatch SAU khi SaveChanges() thành công. Không nằm trong transaction — nếu handler fail, document vẫn được lưu, chỉ notification bị miss. Dùng outbox pattern cho production nếu cần đảm bảo.
+
+7.1  Dispatch flow
+// EF Core SaveChanges interceptor (Infrastructure) dispatch flow:
+1. Handler calls _documents.SaveChangesAsync()  → EF commits to DB
+2. SaveChangesInterceptor.SavingChangesAsync()  → collect domain events
+3. After commit: foreach event → _mediator.Publish(event)
+4. MediatR routes to matching INotificationHandler<T>
+   → DocumentPublishedEventHandler  → update Elasticsearch + notify
+   → DocumentRejectedEventHandler   → notify owner
+   → WorkflowStepAdvancedHandler    → notify next approver
+
+7.2  Event Handlers code
+using IsoDoc.Application.Common.Interfaces;
+using IsoDoc.Domain.Events;
+using IsoDoc.Domain.Interfaces;
+using MediatR;
+using Microsoft.Extensions.Logging;
+
+namespace IsoDoc.Application.Documents.EventHandlers;
+
+/// <summary>
+/// Triggered after a document is published.
+/// Runs AFTER the database transaction commits (dispatched by EF Core SaveChanges interceptor).
+///
+/// Responsibilities:
+/// 1. Update Elasticsearch search index
+/// 2. Send in-app + email notifications to all viewers
+/// 3. Archive the previous published version
+/// </summary>
+public sealed class DocumentPublishedEventHandler
+    : INotificationHandler<DocumentPublishedEvent>
+{
+    private readonly ISearchService       _search;
+    private readonly IDocumentRepository  _documents;
+    private readonly INotificationSender  _notifications;
+    private readonly ILogger<DocumentPublishedEventHandler> _logger;
+
+    public DocumentPublishedEventHandler(
+        ISearchService       search,
+        IDocumentRepository  documents,
+        INotificationSender  notifications,
+        ILogger<DocumentPublishedEventHandler> logger)
+    {
+        _search        = search;
+        _documents     = documents;
+        _notifications = notifications;
+        _logger        = logger;
+    }
+
+    public async Task Handle(DocumentPublishedEvent notification, CancellationToken ct)
+    {
+        _logger.LogInformation(
+            "Handling DocumentPublishedEvent for {Code} v{Version}",
+            notification.DocumentCode, notification.Version);
+
+        var document = await _documents.GetByIdAsync(notification.DocumentId, ct);
+        if (document is null)
+        {
+            _logger.LogWarning("Document {Id} not found for indexing.", notification.DocumentId);
+            return;
+        }
+
+        // 1. Update search index
+        await _search.UpdateDocumentIndexAsync(document, ct);
+
+        // 2. Notify (fire-and-forget with error swallow — not critical path)
+        try
+        {
+            await _notifications.SendInAppNotificationAsync(
+                userId:    notification.ApprovedBy,
+                title:     "Tài liệu đã được phát hành",
+                message:   $"Tài liệu {notification.DocumentCode} v{notification.Version} đã được phê duyệt và phát hành.",
+                actionUrl: $"/documents/{notification.DocumentId}",
+                ct:        ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send publish notification for {Code}", notification.DocumentCode);
+        }
+    }
+}
+
+/// <summary>
+/// Triggered when a document is rejected.
+/// Notifies the document owner with the rejection reason.
+/// </summary>
+public sealed class DocumentRejectedEventHandler
+    : INotificationHandler<DocumentRejectedEvent>
+{
+    private readonly IDocumentRepository  _documents;
+    private readonly INotificationSender  _notifications;
+    private readonly ILogger<DocumentRejectedEventHandler> _logger;
+
+    public DocumentRejectedEventHandler(
+        IDocumentRepository  documents,
+        INotificationSender  notifications,
+        ILogger<DocumentRejectedEventHandler> logger)
+    {
+        _documents     = documents;
+        _notifications = notifications;
+        _logger        = logger;
+    }
+
+    public async Task Handle(DocumentRejectedEvent notification, CancellationToken ct)
+    {
+        var document = await _documents.GetByIdAsync(notification.DocumentId, ct);
+        if (document is null) return;
+
+        await _notifications.SendInAppNotificationAsync(
+            userId:    document.OwnerId,
+            title:     "Tài liệu bị từ chối",
+            message:   $"Tài liệu {document.Code} đã bị từ chối. Lý do: {notification.Reason}",
+            actionUrl: $"/documents/{document.Id}",
+            ct:        ct);
+
+        _logger.LogInformation(
+            "Rejection notification sent to owner {OwnerId} for document {Code}",
+            document.OwnerId, document.Code);
+    }
+}
+
+/// <summary>
+/// Triggered when a workflow step is approved and the next approver needs to act.
+/// Sends email + in-app notification to the next approver.
+/// </summary>
+public sealed class WorkflowStepAdvancedEventHandler
+    : INotificationHandler<WorkflowStepAdvancedEvent>
+{
+    private readonly INotificationSender _notifications;
+    private readonly IDocumentRepository _documents;
+    private readonly ILogger<WorkflowStepAdvancedEventHandler> _logger;
+
+    public WorkflowStepAdvancedEventHandler(
+        INotificationSender notifications,
+        IDocumentRepository documents,
+        ILogger<WorkflowStepAdvancedEventHandler> logger)
+    {
+        _notifications = notifications;
+        _documents     = documents;
+        _logger        = logger;
+    }
+
+    public async Task Handle(WorkflowStepAdvancedEvent notification, CancellationToken ct)
+    {
+        var document = await _documents.GetByIdAsync(notification.DocumentId, ct);
+        if (document is null) return;
+
+        await _notifications.SendInAppNotificationAsync(
+            userId:    notification.NextApproverId,
+            title:     $"Cần phê duyệt: {document.Code}",
+            message:   $"Tài liệu '{document.Title}' đang chờ phê duyệt bước {notification.NextStepOrder} của bạn.",
+            actionUrl: $"/approvals/{notification.DocumentId}",
+            ct:        ct);
+
+        _logger.LogInformation(
+            "Approval request sent to {ApproverId} for document {Code} step {Step}",
+            notification.NextApproverId, document.Code, notification.NextStepOrder);
+    }
+}
+
+ 
+8. Dependency Injection — DependencyInjection.cs
+Một dòng duy nhất trong Program.cs: builder.Services.AddApplicationServices() — đăng ký MediatR, FluentValidation, AutoMapper, và tất cả Pipeline Behaviours.
+
+using FluentValidation;
+using IsoDoc.Application.Common.Behaviours;
+using MediatR;
+using Microsoft.Extensions.DependencyInjection;
+using System.Reflection;
+
+namespace IsoDoc.Application;
+
+/// <summary>
+/// Extension method for IServiceCollection.
+/// Called from WebAPI/Program.cs: services.AddApplicationServices()
+///
+/// Registers:
+/// - MediatR (all handlers in this assembly)
+/// - FluentValidation (all validators in this assembly)
+/// - Pipeline behaviours (in order: Logging → Validation → Authorization)
+/// - AutoMapper profiles
+/// </summary>
+public static class DependencyInjection
+{
+    public static IServiceCollection AddApplicationServices(
+        this IServiceCollection services)
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+
+        // MediatR — scans assembly for IRequestHandler, INotificationHandler
+        services.AddMediatR(cfg =>
+        {
+            cfg.RegisterServicesFromAssembly(assembly);
+
+            // Pipeline behaviours execute in registration order:
+            cfg.AddBehavior(typeof(IPipelineBehavior<,>), typeof(LoggingBehaviour<,>));
+            cfg.AddBehavior(typeof(IPipelineBehavior<,>), typeof(ValidationBehaviour<,>));
+            cfg.AddBehavior(typeof(IPipelineBehavior<,>), typeof(AuthorizationBehaviour<,>));
+        });
+
+        // FluentValidation — scans assembly for AbstractValidator<T>
+        services.AddValidatorsFromAssembly(assembly);
+
+        // AutoMapper — scans assembly for Profile subclasses
+        services.AddAutoMapper(assembly);
+
+        return services;
+    }
+}
+
+
+8.1  Đăng ký trong Program.cs (WebAPI)
+// Program.cs
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services
+    .AddApplicationServices()      // ← Application layer (MediatR, Validators, AutoMapper)
+    .AddInfrastructureServices()   // ← Infrastructure (EF Core, Blob, Redis, Search)
+    .AddWebApiServices();          // ← Controllers, Swagger, Auth middleware
+
+var app = builder.Build();
+app.UseExceptionHandling();        // ← Map DomainException → HTTP 400/404/422
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+app.Run();
+
+--- Hết Phần 2: Application Layer. Phần tiếp theo: Infrastructure Layer (EF Core, Blob Storage, Elasticsearch) ---

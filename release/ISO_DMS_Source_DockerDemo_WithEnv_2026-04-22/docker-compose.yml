@@ -1,0 +1,84 @@
+# ISO Documents Management — full demo stack (SQL Server + Redis + Elasticsearch + API + Blazor)
+# Usage: copy .env.example to .env (optional), then: docker compose up --build
+services:
+  isodoc-redis:
+    image: redis:7-alpine
+    container_name: isodoc-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - isodoc-redis-data:/data
+    restart: unless-stopped
+
+  isodoc-sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: isodoc-sql
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-IsoDoc_Demo1!}"
+    ports:
+      - "14333:1433"
+    volumes:
+      - isodoc-sql-data:/var/opt/mssql
+
+  isodoc-es:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
+    container_name: isodoc-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms256m -Xmx256m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - isodoc-es-data:/usr/share/elasticsearch/data
+    mem_limit: 1g
+
+  isodoc-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: isodoc-api:local
+    container_name: isodoc-api
+    depends_on:
+      - isodoc-sql
+      - isodoc-redis
+      - isodoc-es
+    ports:
+      - "5075:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+      ConnectionStrings__SqlServer: "Server=isodoc-sql,1433;Database=IsoDocDms;User Id=sa;Password=${MSSQL_SA_PASSWORD:-IsoDoc_Demo1!};TrustServerCertificate=True;MultipleActiveResultSets=true"
+      ConnectionStrings__Redis: "isodoc-redis:6379"
+      IsoDoc__Elasticsearch__Uri: "http://isodoc-es:9200"
+      IsoDoc__Jwt__SigningKey: "${JWT_SIGNING_KEY:-DOCKER_DEMO_JWT_SIGNING_KEY_32_CHARS_MIN!}"
+      Notifications__EnableSignalR: "true"
+    volumes:
+      - isodoc-blobs:/app/App_Data/blobs
+    restart: unless-stopped
+
+  isodoc-blazor:
+    build:
+      context: .
+      dockerfile: Dockerfile.blazor
+    image: isodoc-blazor:local
+    container_name: isodoc-blazor
+    depends_on:
+      - isodoc-api
+    ports:
+      - "5062:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+    volumes:
+      # Blazor Server + ProtectedLocalStorage dùng Data Protection; không mount thì mỗi lần recreate container
+      # là vòng khóa mới → cookie antiforgery/token cũ trên trình duyệt không giải mã được → lỗi đăng nhập/phiên.
+      - isodoc-blazor-keys:/root/.aspnet/DataProtection-Keys
+    restart: unless-stopped
+
+volumes:
+  isodoc-sql-data:
+  isodoc-es-data:
+  isodoc-redis-data:
+  isodoc-blobs:
+  isodoc-blazor-keys:

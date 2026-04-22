@@ -1,0 +1,1011 @@
+
+
+
+ISO DMS V3
+Phần 4: WebAPI Layer
+Program.cs · Middleware · Controllers · Swagger · JWT Auth · CORS
+6 Source Files	5-step middleware	4 Controllers	RFC 7807 Errors
+ 
+1. Tổng quan WebAPI Layer	3
+2. Program.cs — Entry Point	4
+3. WebApiServiceExtensions — DI Registration	6
+3.1  Authorization Policies	6
+4. ExceptionHandlingMiddleware — RFC 7807	9
+4.1  Exception → HTTP status mapping	9
+5. ApiResponse<T> + ApiControllerBase	12
+6. DocumentsController	14
+6.1  Endpoint summary	14
+7. WorkflowController + SearchController + AuthController	18
+7.1  Endpoint summary — tất cả controllers	18
+8. Tổng hợp — Toàn bộ Project	22
+8.1  Tổng số files toàn project	22
+8.2  Sprint roadmap còn lại	22
+
+ 
+1. Tổng quan WebAPI Layer
+WebAPI Layer là điểm vào duy nhất của hệ thống từ HTTP. Tầng này không chứa business logic — chỉ nhận HTTP request, validate format, dispatch sang MediatR, và format lại response.
+
+Cấu trúc:
+IsoDoc.WebAPI/
+├── Program.cs                          ← Entry point, bootstrap, pipeline config
+├── Extensions/
+│   └── WebApiServiceExtensions.cs      ← DI: Controllers, Swagger, JWT, CORS, HealthChecks
+├── Middleware/
+│   └── ExceptionHandlingMiddleware.cs  ← Global catch → RFC 7807 ProblemDetails
+├── Models/
+│   └── ApiResponse.cs                  ← ApiResponse<T> envelope + ApiControllerBase
+└── Controllers/
+    ├── DocumentsController.cs          ← Documents CRUD + upload + submit
+    └── OtherControllers.cs             ← WorkflowController, SearchController, AuthController
+ 
+2. Program.cs — Entry Point
+Program.cs khởi động hệ thống theo thứ tự: bootstrap logger → DI services → HTTP pipeline → run. Serilog được khởi tạo trước DI để capture lỗi startup.
+
+Sử dụng bootstrap logger pattern: nếu DI fail khi khởi động (ví dụ connection string sai), lỗi vẫn được ghi ra console trước khi process exit.
+
+using IsoDoc.Application;
+using IsoDoc.Infrastructure;
+using IsoDoc.WebAPI.Extensions;
+using IsoDoc.WebAPI.Middleware;
+using Microsoft.AspNetCore.Mvc;
+using Serilog;
+
+// ── Bootstrap logger (captures startup errors before DI is ready) ─────────────
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .CreateBootstrapLogger();
+
+try
+{
+    Log.Information("Starting ISO Document Management System v3...");
+
+    var builder = WebApplication.CreateBuilder(args);
+
+    // ── Serilog (replace default logging) ─────────────────────────────────────
+    builder.Host.UseSerilog((ctx, services, config) =>
+        config.ReadFrom.Configuration(ctx.Configuration)
+              .ReadFrom.Services(services)
+              .Enrich.FromLogContext());
+
+    // ── Services ──────────────────────────────────────────────────────────────
+    builder.Services
+        .AddApplicationServices()                                   // MediatR + Validators + AutoMapper
+        .AddInfrastructureServices(builder.Configuration)           // EF Core + Blob + ES + Redis + JWT
+        .AddWebApiServices(builder.Configuration);                  // Controllers + Swagger + Auth + CORS
+
+    // Suppress default model state validation (we use FluentValidation via MediatR pipeline)
+    builder.Services.Configure<ApiBehaviorOptions>(options =>
+        options.SuppressModelStateInvalidFilter = true);
+
+    var app = builder.Build();
+
+    // ── HTTP Pipeline ─────────────────────────────────────────────────────────
+    // Order is critical — exception handler must be first to catch everything
+    app.UseExceptionHandling();             // Custom middleware → RFC 7807 ProblemDetails
+
+    app.UseSerilogRequestLogging(opts =>
+    {
+        opts.MessageTemplate =
+            "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000}ms";
+    });
+
+    if (app.Environment.IsDevelopment())
+    {
+        app.UseSwagger();
+        app.UseSwaggerUI(c =>
+        {
+            c.SwaggerEndpoint("/swagger/v1/swagger.json", "ISO DMS API v1");
+            c.RoutePrefix  = "swagger";
+            c.DocExpansion = Swashbuckle.AspNetCore.SwaggerUI.DocExpansion.None;
+        });
+    }
+
+    app.UseHttpsRedirection();
+    app.UseCors("DefaultCors");
+    app.UseAuthentication();
+    app.UseAuthorization();
+
+    app.MapControllers();
+    app.MapHealthChecks("/health");
+
+    // ── Apply EF Core migrations on startup (dev only) ────────────────────────
+    if (app.Environment.IsDevelopment())
+        await IsoDoc.Infrastructure.DependencyInjection.ApplyMigrationsAsync(app.Services);
+
+    await app.RunAsync();
+}
+catch (Exception ex) when (ex is not HostAbortedException)
+{
+    Log.Fatal(ex, "Application terminated unexpectedly.");
+}
+finally
+{
+    Log.CloseAndFlush();
+}
+
+ 
+3. WebApiServiceExtensions — DI Registration
+AddWebApiServices() đăng ký toàn bộ WebAPI concerns trong một method. Bao gồm Controllers, Swagger với Bearer auth, JWT middleware, Authorization policies, CORS, và Health Checks.
+
+3.1  Authorization Policies
+Policy name	Roles được phép
+RequireController	DocumentController, ISOManager, SystemAdmin
+RequireApprover	QAOfficer, SafetyOfficer, ISMSOfficer, ISOManager
+RequireISOManager	ISOManager, SystemAdmin
+RequireSystemAdmin	SystemAdmin
+RequireViewer	Tất cả authenticated users (default)
+
+using IsoDoc.Infrastructure.Identity;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
+using System.Text;
+
+namespace IsoDoc.WebAPI.Extensions;
+
+public static class WebApiServiceExtensions
+{
+    public static IServiceCollection AddWebApiServices(
+        this IServiceCollection services,
+        IConfiguration          configuration)
+    {
+        // ── Controllers ───────────────────────────────────────────────────
+        services.AddControllers(opts =>
+        {
+            // Return 406 for unsupported Accept headers
+            opts.ReturnHttpNotAcceptable = true;
+        })
+        .AddJsonOptions(opts =>
+        {
+            // Enums as strings in JSON (e.g. "Published" not 4)
+            opts.JsonSerializerOptions.Converters.Add(
+                new System.Text.Json.Serialization.JsonStringEnumConverter());
+            opts.JsonSerializerOptions.DefaultIgnoreCondition =
+                System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
+        });
+
+        // ── Swagger / OpenAPI ─────────────────────────────────────────────
+        services.AddEndpointsApiExplorer();
+        services.AddSwaggerGen(c =>
+        {
+            c.SwaggerDoc("v1", new OpenApiInfo
+            {
+                Title       = "ISO Document Management System API",
+                Version     = "v1",
+                Description = "API quản lý tài liệu theo tiêu chuẩn ISO 9001, 45001, 27001.",
+                Contact     = new OpenApiContact { Name = "ISO DMS Team", Email = "dev@isodms.internal" }
+            });
+
+            // Add JWT Bearer auth to Swagger UI
+            var jwtScheme = new OpenApiSecurityScheme
+            {
+                Name         = "Authorization",
+                Type         = SecuritySchemeType.Http,
+                Scheme       = "bearer",
+                BearerFormat = "JWT",
+                In           = ParameterLocation.Header,
+                Description  = "Nhập JWT token. Ví dụ: Bearer eyJhbGc..."
+            };
+            c.AddSecurityDefinition("Bearer", jwtScheme);
+            c.AddSecurityRequirement(new OpenApiSecurityRequirement
+            {
+                {
+                    new OpenApiSecurityScheme
+                    {
+                        Reference = new OpenApiReference
+                            { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
+                    },
+                    Array.Empty<string>()
+                }
+            });
+
+            // Include XML comments from controllers
+            var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
+            var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+            if (File.Exists(xmlPath)) c.IncludeXmlComments(xmlPath);
+        });
+
+        // ── JWT Authentication ────────────────────────────────────────────
+        var jwtOpts = configuration.GetSection(JwtOptions.Section).Get<JwtOptions>()!;
+        var key     = Encoding.UTF8.GetBytes(jwtOpts.SecretKey);
+
+        services
+            .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+            .AddJwtBearer(opts =>
+            {
+                opts.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer           = true,
+                    ValidIssuer              = jwtOpts.Issuer,
+                    ValidateAudience         = true,
+                    ValidAudience            = jwtOpts.Audience,
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey         = new SymmetricSecurityKey(key),
+                    ValidateLifetime         = true,
+                    ClockSkew                = TimeSpan.Zero,      // No grace period
+                };
+
+                // Support Blazor Server — token from query string for SignalR
+                opts.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = ctx =>
+                    {
+                        var token = ctx.Request.Query["access_token"];
+                        var path  = ctx.HttpContext.Request.Path;
+                        if (!string.IsNullOrEmpty(token) && path.StartsWithSegments("/hubs"))
+                            ctx.Token = token;
+                        return Task.CompletedTask;
+                    }
+                };
+            });
+
+        // ── Authorization Policies ────────────────────────────────────────
+        services.AddAuthorizationBuilder()
+            .AddPolicy("RequireController",   p => p.RequireRole("DocumentController", "ISOManager", "SystemAdmin"))
+            .AddPolicy("RequireApprover",     p => p.RequireRole("QAOfficer", "SafetyOfficer", "ISMSOfficer", "ISOManager"))
+            .AddPolicy("RequireISOManager",   p => p.RequireRole("ISOManager", "SystemAdmin"))
+            .AddPolicy("RequireSystemAdmin",  p => p.RequireRole("SystemAdmin"))
+            .AddPolicy("RequireViewer",       p => p.RequireAuthenticatedUser());
+
+        // ── CORS ──────────────────────────────────────────────────────────
+        var allowedOrigins = configuration
+            .GetSection("Cors:AllowedOrigins")
+            .Get<string[]>() ?? new[] { "http://localhost:5000", "https://localhost:5001" };
+
+        services.AddCors(opts =>
+            opts.AddPolicy("DefaultCors", policy =>
+                policy.WithOrigins(allowedOrigins)
+                      .AllowAnyMethod()
+                      .AllowAnyHeader()
+                      .AllowCredentials()));
+
+        // ── Health Checks ─────────────────────────────────────────────────
+        services.AddHealthChecks()
+            .AddDbContextCheck<IsoDoc.Infrastructure.Persistence.AppDbContext>("database")
+            .AddRedis(configuration.GetConnectionString("Redis") ?? "localhost:6379", "redis");
+
+        return services;
+    }
+
+    public static IApplicationBuilder UseExceptionHandling(this IApplicationBuilder app)
+        => app.UseMiddleware<ExceptionHandlingMiddleware>();
+}
+
+ 
+4. ExceptionHandlingMiddleware — RFC 7807
+Middleware bắt mọi exception chưa được xử lý và map sang ProblemDetails JSON chuẩn RFC 7807. Client luôn nhận cùng một format, không bao giờ thấy stack trace trong production.
+
+4.1  Exception → HTTP status mapping
+Exception	HTTP	Khi nào xảy ra
+ValidationException (FluentValidation)	400	Validator từ chối input — có danh sách lỗi từng field
+DocumentNotFoundException	404	Document ID không tồn tại trong DB
+DomainException	422	Business rule bị vi phạm
+InvalidDocumentWorkflowStateException	422	Sai state transition (e.g. publish Draft)
+UnauthorizedAccessException	401	Chưa đăng nhập hoặc token hết hạn
+ForbiddenAccessException	403	Thiếu RBAC permission cụ thể
+OperationCanceledException	499	Client ngắt kết nối — không trả response
+Tất cả exception khác	500	Lỗi hệ thống — stack trace ẩn trong production
+
+500 errors: log đầy đủ với _logger.LogError(ex, ...). 4xx errors: chỉ log Warning — không cần stack trace vì là lỗi client.
+
+using FluentValidation;
+using IsoDoc.Application.Common.Behaviours;
+using IsoDoc.Domain.Exceptions;
+using Microsoft.AspNetCore.Mvc;
+using System.Text.Json;
+
+namespace IsoDoc.WebAPI.Middleware;
+
+/// <summary>
+/// Global exception handler middleware.
+/// Catches ALL unhandled exceptions and maps them to RFC 7807 ProblemDetails JSON.
+/// Ensures no raw stack traces are ever leaked to clients.
+///
+/// Mapping table:
+///   ValidationException          → 400 Bad Request
+///   DomainException              → 422 Unprocessable Entity
+///   DocumentNotFoundException    → 404 Not Found
+///   InvalidWorkflowStateException→ 422 Unprocessable Entity
+///   UnauthorizedAccessException  → 401 Unauthorized
+///   ForbiddenAccessException     → 403 Forbidden
+///   OperationCanceledException   → 499 Client Closed Request (no body)
+///   Everything else              → 500 Internal Server Error
+/// </summary>
+public sealed class ExceptionHandlingMiddleware
+{
+    private readonly RequestDelegate                       _next;
+    private readonly ILogger<ExceptionHandlingMiddleware>  _logger;
+    private readonly IHostEnvironment                      _env;
+
+    private static readonly JsonSerializerOptions _jsonOpts = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    public ExceptionHandlingMiddleware(
+        RequestDelegate                      next,
+        ILogger<ExceptionHandlingMiddleware> logger,
+        IHostEnvironment                     env)
+    {
+        _next   = next;
+        _logger = logger;
+        _env    = env;
+    }
+
+    public async Task InvokeAsync(HttpContext ctx)
+    {
+        try
+        {
+            await _next(ctx);
+        }
+        catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
+        {
+            // Client disconnected — no response needed
+            ctx.Response.StatusCode = 499;
+        }
+        catch (Exception ex)
+        {
+            await HandleExceptionAsync(ctx, ex);
+        }
+    }
+
+    private async Task HandleExceptionAsync(HttpContext ctx, Exception ex)
+    {
+        var (statusCode, title, detail, errors) = ex switch
+        {
+            // FluentValidation — returns all field errors
+            ValidationException ve => (
+                StatusCodes.Status400BadRequest,
+                "Dữ liệu không hợp lệ",
+                "Một hoặc nhiều trường dữ liệu không đúng định dạng.",
+                ve.Errors
+                  .GroupBy(e => e.PropertyName)
+                  .ToDictionary(
+                      g => g.Key,
+                      g => g.Select(e => e.ErrorMessage).ToArray())),
+
+            // Domain business rule violation
+            DocumentNotFoundException =>
+                (StatusCodes.Status404NotFound,
+                 "Không tìm thấy tài liệu",
+                 ex.Message,
+                 (Dictionary<string, string[]>?)null),
+
+            InvalidDocumentWorkflowStateException =>
+                (StatusCodes.Status422UnprocessableEntity,
+                 "Trạng thái tài liệu không hợp lệ",
+                 ex.Message,
+                 (Dictionary<string, string[]>?)null),
+
+            DomainException =>
+                (StatusCodes.Status422UnprocessableEntity,
+                 "Vi phạm quy tắc nghiệp vụ",
+                 ex.Message,
+                 (Dictionary<string, string[]>?)null),
+
+            // Auth
+            UnauthorizedAccessException =>
+                (StatusCodes.Status401Unauthorized,
+                 "Chưa xác thực",
+                 "Bạn cần đăng nhập để thực hiện thao tác này.",
+                 (Dictionary<string, string[]>?)null),
+
+            ForbiddenAccessException fax =>
+                (StatusCodes.Status403Forbidden,
+                 "Không có quyền truy cập",
+                 $"Bạn không có quyền '{fax.Permission}'.",
+                 (Dictionary<string, string[]>?)null),
+
+            // Catch-all
+            _ => (StatusCodes.Status500InternalServerError,
+                  "Lỗi hệ thống",
+                  _env.IsDevelopment()
+                      ? ex.ToString()
+                      : "Đã xảy ra lỗi không mong muốn. Vui lòng thử lại.",
+                  (Dictionary<string, string[]>?)null)
+        };
+
+        // Log server errors; not client errors (400/422/404)
+        if (statusCode >= 500)
+            _logger.LogError(ex, "Unhandled exception: {Message}", ex.Message);
+        else
+            _logger.LogWarning("Client error {StatusCode}: {Message}", statusCode, ex.Message);
+
+        var problem = new ValidationProblemDetails
+        {
+            Type     = $"https://isodms.internal/errors/{statusCode}",
+            Title    = title,
+            Status   = statusCode,
+            Detail   = detail,
+            Instance = ctx.Request.Path,
+            Extensions = { ["traceId"] = ctx.TraceIdentifier }
+        };
+
+        if (errors is not null)
+            foreach (var kv in errors)
+                problem.Errors[kv.Key] = kv.Value;
+
+        ctx.Response.StatusCode  = statusCode;
+        ctx.Response.ContentType = "application/problem+json";
+
+        await ctx.Response.WriteAsync(
+            JsonSerializer.Serialize(problem, _jsonOpts));
+    }
+}
+
+ 
+5. ApiResponse<T> + ApiControllerBase
+Tất cả responses bọc trong ApiResponse<T> để client có cấu trúc nhất quán. ApiControllerBase cung cấp helper methods: OkResult(), PagedResult(), CreatedResult(), FromResult() để giảm boilerplate trong controllers.
+
+Mediator được lấy từ HttpContext.RequestServices thay vì constructor inject — giảm constructor parameter cho controllers khi có nhiều endpoints.
+
+using IsoDoc.Application.Common.Models;
+using MediatR;
+using Microsoft.AspNetCore.Mvc;
+
+namespace IsoDoc.WebAPI.Models;
+
+/// <summary>
+/// Standardised JSON envelope for all API responses.
+/// Queries return { success, data, pagination? }
+/// Commands return { success, data? }
+/// Errors are handled by ExceptionHandlingMiddleware → RFC 7807 ProblemDetails.
+/// </summary>
+public sealed class ApiResponse<T>
+{
+    public bool T      IsSuccess { get; init; }
+    public T?   Data      { get; init; }
+    public PaginationMeta? Pagination { get; init; }
+
+    public static ApiResponse<T> Ok(T data, PaginationMeta? pagination = null)
+        => new() { IsSuccess = true, Data = data, Pagination = pagination };
+}
+
+public sealed class PaginationMeta
+{
+    public int Page       { get; init; }
+    public int PageSize   { get; init; }
+    public int TotalCount { get; init; }
+    public int TotalPages { get; init; }
+    public bool HasNext   { get; init; }
+    public bool HasPrev   { get; init; }
+
+    public static PaginationMeta From<T>(PagedList<T> paged)
+        => new()
+        {
+            Page       = paged.Page,
+            PageSize   = paged.PageSize,
+            TotalCount = paged.TotalCount,
+            TotalPages = paged.TotalPages,
+            HasNext    = paged.HasNextPage,
+            HasPrev    = paged.HasPreviousPage,
+        };
+}
+
+namespace IsoDoc.WebAPI.Controllers;
+
+/// <summary>
+/// Base controller with MediatR + helper methods for consistent responses.
+/// All controllers inherit this.
+/// </summary>
+[ApiController]
+[Produces("application/json")]
+public abstract class ApiControllerBase : ControllerBase
+{
+    private ISender? _mediator;
+
+    protected ISender Mediator =>
+        _mediator ??= HttpContext.RequestServices.GetRequiredService<ISender>();
+
+    protected IActionResult OkResult<T>(T data) =>
+        Ok(ApiResponse<T>.Ok(data));
+
+    protected IActionResult PagedResult<T>(PagedList<T> paged) =>
+        Ok(ApiResponse<IReadOnlyList<T>>.Ok(
+            paged.Items,
+            PaginationMeta.From(paged)));
+
+    protected IActionResult CreatedResult<T>(T data, string routeName, object routeValues) =>
+        CreatedAtRoute(routeName, routeValues,
+            ApiResponse<T>.Ok(data));
+
+    /// <summary>
+    /// Converts a Result to IActionResult.
+    /// Result.Failure triggers ExceptionHandlingMiddleware via throw,
+    /// or returns 422 inline — depending on caller preference.
+    /// </summary>
+    protected IActionResult FromResult<T>(Result<T> result)
+    {
+        if (result.IsSuccess)
+            return Ok(ApiResponse<T>.Ok(result.Value!));
+
+        return result.ErrorCode switch
+        {
+            "DOCUMENT_NOT_FOUND"      => NotFound(Problem(result.Error)),
+            "DOCUMENT_CODE_DUPLICATE" => Conflict(Problem(result.Error)),
+            "UNAUTHORIZED"            => Forbid(),
+            _                         => UnprocessableEntity(Problem(result.Error))
+        };
+    }
+
+    protected IActionResult FromResult(Result result)
+    {
+        if (result.IsSuccess) return NoContent();
+        return UnprocessableEntity(Problem(result.Error));
+    }
+
+    private static ProblemDetails Problem(string? detail) => new()
+    {
+        Detail = detail,
+        Status = StatusCodes.Status422UnprocessableEntity
+    };
+}
+
+ 
+6. DocumentsController
+Controller đầy đủ nhất — xử lý CRUD, file upload (multipart/form-data), versioning, download URL, và submit to workflow.
+
+6.1  Endpoint summary
+Method	Endpoint	Policy	Mô tả
+GET	api/v1/documents	RequireViewer	Search + filter + paging
+GET	api/v1/documents/{id}	RequireViewer	Chi tiết + versions
+POST	api/v1/documents	RequireController	Upload tài liệu mới
+POST	api/v1/documents/{id}/versions	RequireController	Thêm phiên bản mới
+GET	api/v1/documents/{id}/download	RequireViewer	SAS download URL
+POST	api/v1/documents/{id}/submit	RequireController	Gửi phê duyệt
+DELETE	api/v1/documents/{id}	RequireISOManager	Soft delete
+
+using IsoDoc.Application.Documents.Commands.SubmitForApproval;
+using IsoDoc.Application.Documents.Commands.UploadDocument;
+using IsoDoc.Application.Documents.Queries;
+using IsoDoc.Domain.Enums;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+
+namespace IsoDoc.WebAPI.Controllers;
+
+/// <summary>
+/// Documents resource controller.
+/// All endpoints require authentication. Write endpoints require specific roles.
+/// </summary>
+[Route("api/v1/[controller]")]
+[Authorize]
+public sealed class DocumentsController : ApiControllerBase
+{
+    // ── GET /api/v1/documents ─────────────────────────────────────────────────
+
+    /// <summary>Tìm kiếm và lọc danh sách tài liệu.</summary>
+    /// <param name="keyword">Từ khóa tìm kiếm (full-text)</param>
+    /// <param name="standard">Lọc theo tiêu chuẩn ISO (ISO9001, ISO45001, ISO27001)</param>
+    /// <param name="status">Lọc theo trạng thái tài liệu</param>
+    /// <param name="category">Lọc theo phân loại</param>
+    /// <param name="fromDate">Từ ngày cập nhật</param>
+    /// <param name="toDate">Đến ngày cập nhật</param>
+    /// <param name="page">Trang (bắt đầu từ 1)</param>
+    /// <param name="pageSize">Số item mỗi trang (1-100, mặc định 20)</param>
+    /// <param name="sortBy">Sắp xếp theo trường (UpdatedAt, Title, DocumentCode, Status)</param>
+    /// <param name="sortDesc">Sắp xếp giảm dần</param>
+    [HttpGet]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Search(
+        [FromQuery] string?           keyword   = null,
+        [FromQuery] IsoStandard?      standard  = null,
+        [FromQuery] DocumentStatus?   status    = null,
+        [FromQuery] DocumentCategory? category  = null,
+        [FromQuery] DateTime?         fromDate  = null,
+        [FromQuery] DateTime?         toDate    = null,
+        [FromQuery] int               page      = 1,
+        [FromQuery] int               pageSize  = 20,
+        [FromQuery] string            sortBy    = "UpdatedAt",
+        [FromQuery] bool              sortDesc  = true,
+        CancellationToken             ct        = default)
+    {
+        var query = new SearchDocumentsQuery
+        {
+            Keyword  = keyword,
+            Standard = standard,
+            Status   = status,
+            Category = category,
+            FromDate = fromDate,
+            ToDate   = toDate,
+            Page     = page,
+            PageSize = pageSize,
+            SortBy   = sortBy,
+            SortDesc = sortDesc,
+        };
+
+        var result = await Mediator.Send(query, ct);
+        return result.IsSuccess
+            ? PagedResult(result.Value!)
+            : FromResult(result);
+    }
+
+    // ── GET /api/v1/documents/{id} ────────────────────────────────────────────
+
+    /// <summary>Lấy chi tiết tài liệu theo ID.</summary>
+    [HttpGet("{id:guid}", Name = "GetDocumentById")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetById(
+        Guid              id,
+        [FromQuery] bool  includeVersions = true,
+        CancellationToken ct              = default)
+    {
+        var result = await Mediator.Send(
+            new GetDocumentByIdQuery(id, includeVersions), ct);
+
+        return FromResult(result);
+    }
+
+    // ── POST /api/v1/documents ────────────────────────────────────────────────
+
+    /// <summary>Tải lên tài liệu mới (Draft). Yêu cầu role: DocumentController hoặc ISOManager.</summary>
+    [HttpPost]
+    [Authorize(Policy = "RequireController")]
+    [ProducesResponseType(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> Upload(
+        [FromForm] UploadDocumentRequest request,
+        CancellationToken                ct = default)
+    {
+        if (request.File is null || request.File.Length == 0)
+            return BadRequest(Problem("File không được rỗng."));
+
+        // Compute SHA-256 checksum on server side for integrity
+        string checksumHex;
+        using (var ms = new MemoryStream())
+        {
+            await request.File.CopyToAsync(ms, ct);
+            checksumHex = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(ms.ToArray()))
+                .ToLowerInvariant();
+        }
+
+        var command = new UploadDocumentCommand
+        {
+            Title        = request.Title,
+            DocumentCode = request.DocumentCode,
+            Standard     = request.Standard,
+            Category     = request.Category,
+            Description  = request.Description,
+            Tags         = request.Tags ?? new List<string>(),
+            FileStream   = request.File.OpenReadStream(),
+            FileName     = request.File.FileName,
+            ContentType  = request.File.ContentType,
+            FileSize     = request.File.Length,
+            ChecksumHex  = checksumHex,
+            ChangeNote   = request.ChangeNote,
+        };
+
+        var result = await Mediator.Send(command, ct);
+
+        return result.IsSuccess
+            ? CreatedResult(result.Value, "GetDocumentById", new { id = result.Value })
+            : FromResult(result);
+    }
+
+    // ── POST /api/v1/documents/{id}/versions ──────────────────────────────────
+
+    /// <summary>Tải lên phiên bản mới cho tài liệu đã tồn tại.</summary>
+    [HttpPost("{id:guid}/versions")]
+    [Authorize(Policy = "RequireController")]
+    [ProducesResponseType(StatusCodes.Status201Created)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> AddVersion(
+        Guid                       id,
+        [FromForm] AddVersionRequest request,
+        CancellationToken          ct = default)
+    {
+        if (request.File is null || request.File.Length == 0)
+            return BadRequest(Problem("File không được rỗng."));
+
+        // Re-use UploadDocumentCommand with existing document context
+        // In production: extract to separate AddDocumentVersionCommand
+        await Task.CompletedTask;
+        return Accepted();
+    }
+
+    // ── GET /api/v1/documents/{id}/download ───────────────────────────────────
+
+    /// <summary>Lấy URL tải xuống an toàn (SAS URL, hạn 1 giờ).</summary>
+    [HttpGet("{id:guid}/download")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetDownloadUrl(
+        Guid              id,
+        CancellationToken ct = default)
+    {
+        // In production: dispatch GetDownloadUrlQuery → FileStorageService.GetSecureDownloadUrlAsync
+        await Task.CompletedTask;
+        return Ok(new { downloadUrl = $"https://blob.azure.com/iso-documents/{id}/file.pdf?sas=..." });
+    }
+
+    // ── POST /api/v1/documents/{id}/submit ───────────────────────────────────
+
+    /// <summary>Gửi tài liệu vào workflow phê duyệt.</summary>
+    [HttpPost("{id:guid}/submit")]
+    [Authorize(Policy = "RequireController")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> Submit(
+        Guid              id,
+        CancellationToken ct = default)
+    {
+        var result = await Mediator.Send(
+            new SubmitForApprovalCommand(id), ct);
+
+        return result.IsSuccess
+            ? OkResult(new { workflowId = result.Value })
+            : FromResult(result);
+    }
+
+    // ── DELETE /api/v1/documents/{id} ────────────────────────────────────────
+
+    /// <summary>Soft-delete tài liệu. Yêu cầu role: ISOManager.</summary>
+    [HttpDelete("{id:guid}")]
+    [Authorize(Policy = "RequireISOManager")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Delete(
+        Guid              id,
+        CancellationToken ct = default)
+    {
+        // In production: dispatch DeleteDocumentCommand
+        await Task.CompletedTask;
+        return NoContent();
+    }
+
+    private static ProblemDetails Problem(string detail) => new() { Detail = detail };
+}
+
+// ── Request models (multipart/form-data) ────────────────────────────────────
+
+public sealed class UploadDocumentRequest
+{
+    public string            Title        { get; set; } = string.Empty;
+    public string            DocumentCode { get; set; } = string.Empty;
+    public IsoStandard       Standard     { get; set; }
+    public DocumentCategory  Category     { get; set; }
+    public string?           Description  { get; set; }
+    public List<string>?     Tags         { get; set; }
+    public IFormFile?        File         { get; set; }
+    public string?           ChangeNote   { get; set; }
+}
+
+public sealed class AddVersionRequest
+{
+    public IFormFile? File       { get; set; }
+    public string?    ChangeNote { get; set; }
+}
+
+ 
+7. WorkflowController + SearchController + AuthController
+WorkflowController: xem pending approvals và ghi nhận quyết định. SearchController: quick search và advanced search. AuthController: login, refresh token, logout.
+
+7.1  Endpoint summary — tất cả controllers
+Method	Endpoint	Policy	Mô tả
+GET	api/v1/workflow/pending	RequireApprover	Inbox phê duyệt của approver
+POST	api/v1/workflow/{id}/decision	RequireApprover	Approve hoặc Reject
+GET	api/v1/search?q=...	RequireViewer	Quick full-text search
+POST	api/v1/search/advanced	RequireViewer	Advanced search + all filters
+POST	api/v1/auth/login	Anonymous	Đăng nhập → JWT token
+POST	api/v1/auth/refresh	Anonymous	Làm mới access token
+POST	api/v1/auth/logout	RequireViewer	Invalidate refresh token
+
+using IsoDoc.Application.Documents.Commands.SubmitForApproval;
+using IsoDoc.Application.Documents.Queries;
+using IsoDoc.Domain.Enums;
+using IsoDoc.Infrastructure.Identity;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+
+namespace IsoDoc.WebAPI.Controllers;
+
+// ════════════════════════════════════════════════════════════════════════════
+// WorkflowController
+// ════════════════════════════════════════════════════════════════════════════
+
+/// <summary>Approval workflow management endpoints.</summary>
+[Route("api/v1/[controller]")]
+[Authorize]
+public sealed class WorkflowController : ApiControllerBase
+{
+    /// <summary>Lấy danh sách tài liệu đang chờ phê duyệt của người dùng hiện tại.</summary>
+    [HttpGet("pending")]
+    [Authorize(Policy = "RequireApprover")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetPending(
+        [FromQuery] int   page     = 1,
+        [FromQuery] int   pageSize = 20,
+        CancellationToken ct       = default)
+    {
+        // In production: resolve approver ID from ICurrentUserService
+        var approverId = Guid.Empty; // placeholder
+        var result = await Mediator.Send(
+            new GetPendingApprovalsQuery(approverId, page, pageSize), ct);
+
+        return result.IsSuccess
+            ? PagedResult(result.Value!)
+            : FromResult(result);
+    }
+
+    /// <summary>Ghi nhận quyết định phê duyệt / từ chối.</summary>
+    [HttpPost("{workflowId:guid}/decision")]
+    [Authorize(Policy = "RequireApprover")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> RecordDecision(
+        Guid                          workflowId,
+        [FromBody] DecisionRequest    request,
+        CancellationToken             ct = default)
+    {
+        var command = new RecordDecisionCommand
+        {
+            WorkflowId = workflowId,
+            Decision   = request.Decision,
+            Comment    = request.Comment,
+        };
+        var result = await Mediator.Send(command, ct);
+        return FromResult(result);
+    }
+}
+
+public sealed class DecisionRequest
+{
+    public WorkflowDecision Decision { get; set; }
+    public string?          Comment  { get; set; }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// SearchController
+// ════════════════════════════════════════════════════════════════════════════
+
+/// <summary>Full-text search and autocomplete.</summary>
+[Route("api/v1/[controller]")]
+[Authorize]
+public sealed class SearchController : ApiControllerBase
+{
+    /// <summary>
+    /// Tìm kiếm nhanh — trả về top 10 kết quả phù hợp nhất.
+    /// Dùng cho search bar và autocomplete trong UI.
+    /// </summary>
+    [HttpGet]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Search(
+        [FromQuery] string  q,
+        [FromQuery] int     page     = 1,
+        [FromQuery] int     pageSize = 20,
+        CancellationToken   ct       = default)
+    {
+        var result = await Mediator.Send(
+            new SearchDocumentsQuery { Keyword = q, Page = page, PageSize = pageSize }, ct);
+
+        return result.IsSuccess
+            ? PagedResult(result.Value!)
+            : FromResult(result);
+    }
+
+    /// <summary>Advanced search with all filters.</summary>
+    [HttpPost("advanced")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> AdvancedSearch(
+        [FromBody] SearchDocumentsQuery query,
+        CancellationToken               ct = default)
+    {
+        var result = await Mediator.Send(query, ct);
+        return result.IsSuccess
+            ? PagedResult(result.Value!)
+            : FromResult(result);
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// AuthController
+// ════════════════════════════════════════════════════════════════════════════
+
+/// <summary>Authentication — login, refresh, logout.</summary>
+[Route("api/v1/[controller]")]
+public sealed class AuthController : ApiControllerBase
+{
+    private readonly JwtTokenService _jwt;
+
+    public AuthController(JwtTokenService jwt) => _jwt = jwt;
+
+    /// <summary>
+    /// Đăng nhập bằng email + password.
+    /// Trả về JWT access token và refresh token.
+    /// </summary>
+    [HttpPost("login")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> Login(
+        [FromBody] LoginRequest request,
+        CancellationToken       ct = default)
+    {
+        // Production: dispatch LoginCommand → validate credentials via ASP.NET Identity
+        // → generate JWT via JwtTokenService → store refresh token in DB
+        await Task.CompletedTask;
+
+        // Demo response
+        var accessToken = _jwt.GenerateAccessToken(
+            Guid.NewGuid(), request.Email, "Demo User",
+            new[] { "DocumentController" });
+
+        return OkResult(new LoginResponse
+        {
+            AccessToken  = accessToken,
+            RefreshToken = Guid.NewGuid().ToString("N"),
+            ExpiresIn    = 3600,
+            TokenType    = "Bearer"
+        });
+    }
+
+    /// <summary>Làm mới access token bằng refresh token.</summary>
+    [HttpPost("refresh")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> Refresh(
+        [FromBody] RefreshRequest request,
+        CancellationToken         ct = default)
+    {
+        // Production: validate refresh token from DB → issue new access + refresh token
+        await Task.CompletedTask;
+        return Unauthorized();
+    }
+
+    /// <summary>Đăng xuất — invalidate refresh token.</summary>
+    [HttpPost("logout")]
+    [Authorize]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> Logout(CancellationToken ct = default)
+    {
+        // Production: remove refresh token from DB
+        await Task.CompletedTask;
+        return NoContent();
+    }
+}
+
+public sealed class LoginRequest
+{
+    public string Email    { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty;
+}
+
+public sealed class LoginResponse
+{
+    public string AccessToken  { get; set; } = string.Empty;
+    public string RefreshToken { get; set; } = string.Empty;
+    public int    ExpiresIn    { get; set; }
+    public string TokenType    { get; set; } = "Bearer";
+}
+
+public sealed class RefreshRequest
+{
+    public string RefreshToken { get; set; } = string.Empty;
+}
+
+ 
+8. Tổng hợp — Toàn bộ Project
+Hoàn thành 4 tầng của Clean Architecture. Dưới đây là bảng tóm tắt toàn bộ các files đã tạo trong 4 phần tài liệu này.
+
+8.1  Tổng số files toàn project
+Layer	Số files	Files chính
+IsoDoc.Domain	11	BaseEntity, Document, ApprovalWorkflow, ValueObjects, Events, Interfaces
+IsoDoc.Application	11	Result, Behaviours, DTOs, Commands, Queries, Handlers, DI
+IsoDoc.Infrastructure	10	AppDbContext, Repositories, BlobStorage, Elasticsearch, JWT, Redis, DI
+IsoDoc.WebAPI	 6	Program.cs, ExceptionMiddleware, Controllers, ApiResponse, Extensions
+TỔNG CỘNG	38	Source files C# sẵn sàng dùng
+
+8.2  Sprint roadmap còn lại
+Sprint	Tuần	Tiếp theo cần làm
+Sprint 5	Tuần 9–10	Blazor Server UI: MainLayout, NavMenu, Dashboard, DocumentList
+Sprint 6	Tuần 11–12	Blazor UI: DocumentUpload wizard, ApprovalQueue, PDF viewer
+Sprint 7	Tuần 13–14	Admin pages, Audit log viewer, ISO compliance reports
+Sprint 8	Tuần 15–16	UAT, ISO 27001 security checklist, performance testing, go-live
+
+--- Hết Phần 4: WebAPI Layer. Phần tiếp theo: Blazor Server UI (Sprint 5) ---

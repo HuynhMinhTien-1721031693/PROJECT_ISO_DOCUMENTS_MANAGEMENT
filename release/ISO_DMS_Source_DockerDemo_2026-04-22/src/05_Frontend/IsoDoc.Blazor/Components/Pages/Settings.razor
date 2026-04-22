@@ -1,0 +1,35 @@
+@page "/settings"
+@attribute [Authorize]
+@inject IConfiguration Configuration
+
+<h1>Settings</h1>
+<p class="muted">Thông tin cấu hình ứng dụng Blazor (URL API mà <b>máy chủ Blazor</b> dùng khi gọi Web API — không phải URL bạn gõ trên trình duyệt).</p>
+
+<p style="margin: 12px 0;">
+    <a class="btn secondary" href="/">Dashboard</a>
+    <a class="btn secondary" href="/documents">Danh sách tài liệu</a>
+    <a class="btn secondary" href="/workflow">Workflow</a>
+</p>
+
+<div class="card detail-grid" style="margin-top: 12px;">
+    <div><b>API Base URL:</b> @ApiBaseUrl</div>
+    <div><b>Environment:</b> @EnvironmentName</div>
+    <div class="full" style="line-height: 1.55;">
+        @if (IsDocker)
+        {
+            <p style="margin: 0 0 8px;"><b>Docker:</b> Hostname <code>isodoc-api</code> chỉ phân giải <b>trong mạng Docker</b> (container Blazor → container API). Đó là cấu hình đúng cho demo Compose; bạn <b>không</b> mở URL này trực tiếp trên trình duyệt máy host.</p>
+            <p style="margin: 0 0 8px;">Trình duyệt: giao diện <code>http://localhost:5062</code>. Gọi API từ máy host (Swagger, Postman): <code>http://localhost:5075</code>.</p>
+            <p style="margin: 0;"><b>Đổi cấu hình:</b> sửa <code>src/05_Frontend/IsoDoc.Blazor/appsettings.Docker.json</code> (mục <code>Api:BaseUrl</code>) — phải khớp địa chỉ API <b>nhìn từ container Blazor</b> (cổng nội bộ API trong Compose thường là <code>8080</code>).</p>
+        }
+        else
+        {
+            <p style="margin: 0 0 8px;"><b>Gợi ý:</b> Chạy local (không Docker): cập nhật <code>appsettings.json</code> — <code>Api:BaseUrl</code> trỏ tới cổng API bạn đang chạy (mặc định dự án thường là <code>http://localhost:5075/api/v1/</code>).</p>
+        }
+    </div>
+</div>
+
+@code {
+    private string ApiBaseUrl => Configuration["Api:BaseUrl"] ?? "(not configured)";
+    private string EnvironmentName => Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production";
+    private bool IsDocker => string.Equals(EnvironmentName, "Docker", StringComparison.OrdinalIgnoreCase);
+}

@@ -1,0 +1,35 @@
+## Build artifacts
+bin/
+obj/
+
+## User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Visual Studio / VS Code
+.vs/
+.vscode/
+
+## Logs
+*.log
+
+## Cursor local metadata
+.cursor/
+
+## Local runtime uploads (dev blob storage)
+src/04_WebAPI/IsoDoc.WebAPI/App_Data/
+
+## Microsoft Office lock / temporary owner files
+~$*
+**/~$*
+
+## Local-only overrides (copy from *.example)
+src/04_WebAPI/IsoDoc.WebAPI/appsettings.Development.json
+
+## Secrets and local env (use .env.example)
+.env
+
+## Local release archives (keep out of git; use Releases or nộp riêng)
+*.zip

@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ISO DMS — Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #0f1117;
+    --surface:   #181b24;
+    --surface2:  #1e2230;
+    --border:    rgba(255,255,255,0.07);
+    --accent:    #4f8ef7;
+    --teal:      #2dd4bf;
+    --gold:      #f59e0b;
+    --red:       #f87171;
+    --green:     #34d399;
+    --text:      #e8eaf0;
+    --muted:     #6b7280;
+    --radius:    14px;
+    --font-body: 'DM Sans', sans-serif;
+    --font-head: 'Syne', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--font-body);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    overflow-x: hidden;
+  }
+
+  /* ── SIDEBAR ─────────────────────────────────────────────── */
+  .sidebar {
+    width: 240px;
+    min-height: 100vh;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 28px 16px;
+    position: fixed;
+    top: 0; left: 0;
+    z-index: 100;
+    transition: transform .3s ease;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 8px 28px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .logo-icon {
+    width: 36px; height: 36px;
+    background: linear-gradient(135deg, var(--accent), var(--teal));
+    border-radius: 10px;
+    display: grid; place-items: center;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .logo-text { line-height: 1.2; }
+  .logo-title { font-family: var(--font-head); font-size: 15px; font-weight: 700; color: var(--text); }
+  .logo-sub { font-size: 10px; color: var(--muted); letter-spacing: .5px; text-transform: uppercase; }
+
+  .nav-section { margin-bottom: 24px; }
+  .nav-label {
+    font-size: 10px; font-weight: 600; letter-spacing: 1.2px;
+    text-transform: uppercase; color: var(--muted);
+    padding: 0 12px; margin-bottom: 6px;
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 12px; border-radius: 10px;
+    font-size: 13.5px; font-weight: 500; color: var(--muted);
+    cursor: pointer; transition: all .18s; text-decoration: none;
+    position: relative; overflow: hidden;
+  }
+  .nav-item:hover { background: var(--surface2); color: var(--text); }
+  .nav-item.active {
+    background: linear-gradient(90deg, rgba(79,142,247,.18), rgba(79,142,247,.05));
+    color: var(--accent);
+  }
+  .nav-item.active::before {
+    content: ''; position: absolute; left: 0; top: 20%; bottom: 20%;
+    width: 3px; background: var(--accent); border-radius: 0 3px 3px 0;
+  }
+  .nav-icon { width: 18px; text-align: center; font-size: 15px; flex-shrink: 0; }
+  .nav-badge {
+    margin-left: auto; background: var(--red); color: #fff;
+    font-size: 10px; font-weight: 700; padding: 2px 6px;
+    border-radius: 20px; min-width: 18px; text-align: center;
+  }
+
+  .sidebar-bottom {
+    margin-top: auto; padding-top: 20px;
+    border-top: 1px solid var(--border);
+  }
+  .user-card {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; border-radius: 10px;
+    background: var(--surface2); cursor: pointer;
+  }
+  .avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--teal));
+    display: grid; place-items: center; font-size: 13px; font-weight: 700;
+    flex-shrink: 0; color: #fff;
+  }
+  .user-info { flex: 1; min-width: 0; }
+  .user-name { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .user-role { font-size: 10px; color: var(--muted); }
+
+  /* ── MAIN ────────────────────────────────────────────────── */
+  .main {
+    margin-left: 240px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+
+  /* ── TOPBAR ──────────────────────────────────────────────── */
+  .topbar {
+    height: 64px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center;
+    padding: 0 32px;
+    gap: 16px;
+    position: sticky; top: 0;
+    background: rgba(15,17,23,.85);
+    backdrop-filter: blur(12px);
+    z-index: 50;
+  }
+  .topbar-title {
+    font-family: var(--font-head);
+    font-size: 20px; font-weight: 800;
+    color: var(--text); flex: 1;
+  }
+  .topbar-title span { color: var(--accent); }
+
+  .topbar-actions { display: flex; align-items: center; gap: 10px; }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 8px 16px; border-radius: 9px;
+    font-family: var(--font-body); font-size: 13px; font-weight: 500;
+    cursor: pointer; border: none; transition: all .18s;
+  }
+  .btn-primary {
+    background: var(--accent); color: #fff;
+  }
+  .btn-primary:hover { background: #6fa3ff; transform: translateY(-1px); box-shadow: 0 6px 20px rgba(79,142,247,.35); }
+  .btn-ghost {
+    background: var(--surface2); color: var(--muted); border: 1px solid var(--border);
+  }
+  .btn-ghost:hover { color: var(--text); border-color: rgba(255,255,255,.15); }
+
+  .notif-btn {
+    width: 38px; height: 38px; border-radius: 10px;
+    background: var(--surface2); border: 1px solid var(--border);
+    display: grid; place-items: center; cursor: pointer;
+    font-size: 16px; position: relative; transition: all .18s;
+  }
+  .notif-btn:hover { border-color: var(--accent); }
+  .notif-dot {
+    position: absolute; top: 7px; right: 7px;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--red); border: 2px solid var(--bg);
+  }
+
+  /* ── CONTENT ─────────────────────────────────────────────── */
+  .content { padding: 32px; flex: 1; }
+
+  /* ALERT */
+  .alert {
+    display: flex; align-items: center; gap: 12px;
+    background: rgba(248,113,113,.1); border: 1px solid rgba(248,113,113,.25);
+    border-radius: var(--radius); padding: 14px 18px;
+    margin-bottom: 28px; animation: slideDown .4s ease;
+  }
+  .alert-icon { font-size: 16px; flex-shrink: 0; }
+  .alert-msg { font-size: 13.5px; color: #fca5a5; flex: 1; }
+  .alert-close { cursor: pointer; color: var(--muted); font-size: 16px; background: none; border: none; padding: 0; }
+  .alert-close:hover { color: var(--text); }
+
+  /* SECTION HEADER */
+  .section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .section-title {
+    font-size: 11px; font-weight: 600; letter-spacing: 1px;
+    text-transform: uppercase; color: var(--muted);
+  }
+
+  /* KPI CARDS */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+
+  .kpi-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    position: relative; overflow: hidden;
+    transition: transform .2s, box-shadow .2s;
+    cursor: default;
+  }
+  .kpi-card:hover { transform: translateY(-3px); box-shadow: 0 12px 32px rgba(0,0,0,.4); }
+  .kpi-card::after {
+    content: ''; position: absolute;
+    top: 0; left: 0; right: 0; height: 2px;
+  }
+  .kpi-card.c-blue::after   { background: var(--accent); }
+  .kpi-card.c-teal::after   { background: var(--teal); }
+  .kpi-card.c-gold::after   { background: var(--gold); }
+  .kpi-card.c-green::after  { background: var(--green); }
+
+  .kpi-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .kpi-label { font-size: 11.5px; font-weight: 500; color: var(--muted); }
+  .kpi-icon {
+    width: 32px; height: 32px; border-radius: 9px;
+    display: grid; place-items: center; font-size: 15px;
+  }
+  .kpi-card.c-blue  .kpi-icon { background: rgba(79,142,247,.15); }
+  .kpi-card.c-teal  .kpi-icon { background: rgba(45,212,191,.15); }
+  .kpi-card.c-gold  .kpi-icon { background: rgba(245,158,11,.15); }
+  .kpi-card.c-green .kpi-icon { background: rgba(52,211,153,.15); }
+
+  .kpi-value {
+    font-family: var(--font-head);
+    font-size: 38px; font-weight: 800;
+    line-height: 1; margin-bottom: 8px;
+  }
+  .kpi-card.c-blue  .kpi-value { color: var(--accent); }
+  .kpi-card.c-teal  .kpi-value { color: var(--teal); }
+  .kpi-card.c-gold  .kpi-value { color: var(--gold); }
+  .kpi-card.c-green .kpi-value { color: var(--green); }
+
+  .kpi-trend {
+    font-size: 11.5px; color: var(--muted);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .kpi-trend.up   { color: var(--green); }
+  .kpi-trend.warn { color: var(--gold); }
+
+  /* STATUS BAR inside card */
+  .kpi-bar { height: 3px; background: var(--surface2); border-radius: 2px; margin-top: 14px; overflow: hidden; }
+  .kpi-bar-fill { height: 100%; border-radius: 2px; width: 0; transition: width 1.2s ease; }
+  .kpi-card.c-blue  .kpi-bar-fill { background: var(--accent); }
+  .kpi-card.c-teal  .kpi-bar-fill { background: var(--teal); }
+  .kpi-card.c-gold  .kpi-bar-fill { background: var(--gold); }
+  .kpi-card.c-green .kpi-bar-fill { background: var(--green); }
+
+  /* BOTTOM GRID */
+  .bottom-grid {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    gap: 20px;
+  }
+
+  /* TABLE PANEL */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .panel-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--border);
+  }
+  .panel-title { font-size: 14px; font-weight: 600; color: var(--text); }
+  .panel-action { font-size: 12px; color: var(--accent); cursor: pointer; font-weight: 500; }
+  .panel-action:hover { text-decoration: underline; }
+
+  /* Empty state */
+  .empty-state {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 52px 24px; gap: 12px; text-align: center;
+  }
+  .empty-icon {
+    width: 56px; height: 56px; border-radius: 16px;
+    background: var(--surface2); display: grid; place-items: center;
+    font-size: 24px; margin-bottom: 4px;
+  }
+  .empty-title { font-size: 14px; font-weight: 600; color: var(--text); }
+  .empty-desc { font-size: 12.5px; color: var(--muted); max-width: 200px; line-height: 1.6; }
+
+  /* Document list rows */
+  .doc-table { width: 100%; border-collapse: collapse; }
+  .doc-table th {
+    text-align: left; font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+    padding: 10px 22px; background: rgba(255,255,255,.02);
+    border-bottom: 1px solid var(--border);
+  }
+  .doc-table td { padding: 13px 22px; font-size: 13px; border-bottom: 1px solid var(--border); }
+  .doc-table tr:last-child td { border-bottom: none; }
+  .doc-table tr:hover td { background: rgba(255,255,255,.02); }
+
+  .doc-code { font-family: monospace; font-size: 12px; color: var(--muted); }
+  .doc-title-cell { font-weight: 500; color: var(--text); }
+
+  .tag {
+    display: inline-flex; align-items: center;
+    padding: 3px 9px; border-radius: 20px; font-size: 11px; font-weight: 500;
+  }
+  .tag-draft    { background: rgba(107,114,128,.15); color: #9ca3af; border: 1px solid rgba(107,114,128,.2); }
+  .tag-review   { background: rgba(245,158,11,.12); color: var(--gold); border: 1px solid rgba(245,158,11,.2); }
+  .tag-approved { background: rgba(52,211,153,.12); color: var(--green); border: 1px solid rgba(52,211,153,.2); }
+  .tag-pending  { background: rgba(79,142,247,.12); color: var(--accent); border: 1px solid rgba(79,142,247,.2); }
+
+  /* RIGHT PANEL - workflow */
+  .workflow-list { padding: 0 0 8px; }
+  .workflow-item {
+    display: flex; align-items: flex-start; gap: 14px;
+    padding: 14px 22px; border-bottom: 1px solid var(--border);
+    transition: background .15s; cursor: pointer;
+  }
+  .workflow-item:last-child { border-bottom: none; }
+  .workflow-item:hover { background: rgba(255,255,255,.02); }
+  .wf-icon {
+    width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
+    display: grid; place-items: center; font-size: 15px;
+  }
+  .wf-icon.pending  { background: rgba(245,158,11,.15); }
+  .wf-icon.approved { background: rgba(52,211,153,.15); }
+  .wf-icon.review   { background: rgba(79,142,247,.15); }
+  .wf-body { flex: 1; min-width: 0; }
+  .wf-title { font-size: 13px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wf-meta  { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+  /* ISO STANDARD tags */
+  .iso-tag {
+    display: inline-flex; align-items: center;
+    padding: 2px 7px; border-radius: 5px; font-size: 10px; font-weight: 600;
+    background: rgba(79,142,247,.15); color: var(--accent);
+    border: 1px solid rgba(79,142,247,.2);
+  }
+
+  /* ANIMATIONS */
+  @keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .kpi-card { animation: fadeUp .4s ease both; }
+  .kpi-card:nth-child(1) { animation-delay: .05s; }
+  .kpi-card:nth-child(2) { animation-delay: .1s; }
+  .kpi-card:nth-child(3) { animation-delay: .15s; }
+  .kpi-card:nth-child(4) { animation-delay: .2s; }
+
+  /* Subtle grid background */
+  body::before {
+    content: '';
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(255,255,255,.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.02) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  .sidebar, .main { position: relative; z-index: 1; }
+</style>
+</head>
+<body>
+
+<!-- ── SIDEBAR ─────────────────────────────────────────────── -->
+<aside class="sidebar">
+  <div class="logo">
+    <div class="logo-icon">📋</div>
+    <div class="logo-text">
+      <div class="logo-title">ISO DMS</div>
+      <div class="logo-sub">Document Management</div>
+    </div>
+  </div>
+
+  <nav class="nav-section">
+    <div class="nav-label">Chính</div>
+    <a class="nav-item active" href="#">
+      <span class="nav-icon">⊞</span> Dashboard
+    </a>
+    <a class="nav-item" href="#">
+      <span class="nav-icon">📂</span> Documents
+    </a>
+    <a class="nav-item" href="#">
+      <span class="nav-icon">✦</span> New Document
+    </a>
+    <a class="nav-item" href="#">
+      <span class="nav-icon">⟳</span> Workflow
+      <span class="nav-badge">3</span>
+    </a>
+  </nav>
+
+  <nav class="nav-section">
+    <div class="nav-label">Hệ thống</div>
+    <a class="nav-item" href="#">
+      <span class="nav-icon">📊</span> Audit Log
+    </a>
+    <a class="nav-item" href="#">
+      <span class="nav-icon">📅</span> Báo cáo tuần
+    </a>
+    <a class="nav-item" href="#">
+      <span class="nav-icon">👥</span> Admin — Users
+    </a>
+    <a class="nav-item" href="#">
+      <span class="nav-icon">⚙</span> Settings
+    </a>
+  </nav>
+
+  <div class="sidebar-bottom">
+    <div class="user-card">
+      <div class="avatar">HT</div>
+      <div class="user-info">
+        <div class="user-name">Huỳnh Minh Tiên</div>
+        <div class="user-role">ISO Manager</div>
+      </div>
+      <span style="color:var(--muted);font-size:14px;cursor:pointer">↩</span>
+    </div>
+  </div>
+</aside>
+
+<!-- ── MAIN ────────────────────────────────────────────────── -->
+<div class="main">
+
+  <!-- TOPBAR -->
+  <header class="topbar">
+    <div class="topbar-title">Dashboard <span>·</span></div>
+    <div style="font-size:13px;color:var(--muted)">Tổng quan tài liệu ISO và tiến độ duyệt.</div>
+    <div class="topbar-actions">
+      <div class="notif-btn">🔔<div class="notif-dot"></div></div>
+      <button class="btn btn-primary">＋ &nbsp;Tài liệu mới</button>
+    </div>
+  </header>
+
+  <!-- CONTENT -->
+  <main class="content">
+
+    <!-- ALERT -->
+    <div class="alert" id="alert">
+      <span class="alert-icon">⚠️</span>
+      <span class="alert-msg">Đã xảy ra lỗi không mong muốn. Vui lòng thử lại hoặc liên hệ quản trị viên.</span>
+      <button class="alert-close" onclick="document.getElementById('alert').style.display='none'">✕</button>
+    </div>
+
+    <!-- KPI CARDS -->
+    <div class="section-header">
+      <span class="section-title">Tổng quan hôm nay</span>
+      <button class="btn btn-ghost" style="font-size:12px;padding:6px 12px">↻ Làm mới</button>
+    </div>
+    <div class="kpi-grid">
+      <div class="kpi-card c-blue">
+        <div class="kpi-header">
+          <span class="kpi-label">Total Documents</span>
+          <div class="kpi-icon">📄</div>
+        </div>
+        <div class="kpi-value" data-val="0">0</div>
+        <div class="kpi-trend">—&nbsp; Chưa có tài liệu</div>
+        <div class="kpi-bar"><div class="kpi-bar-fill" data-pct="0"></div></div>
+      </div>
+
+      <div class="kpi-card c-teal">
+        <div class="kpi-header">
+          <span class="kpi-label">Draft</span>
+          <div class="kpi-icon">✏️</div>
+        </div>
+        <div class="kpi-value" data-val="0">0</div>
+        <div class="kpi-trend">—&nbsp; Bản nháp đang soạn</div>
+        <div class="kpi-bar"><div class="kpi-bar-fill" data-pct="0"></div></div>
+      </div>
+
+      <div class="kpi-card c-gold">
+        <div class="kpi-header">
+          <span class="kpi-label">Under Review</span>
+          <div class="kpi-icon">🔍</div>
+        </div>
+        <div class="kpi-value" data-val="0">0</div>
+        <div class="kpi-trend">—&nbsp; Đang xét duyệt</div>
+        <div class="kpi-bar"><div class="kpi-bar-fill" data-pct="0"></div></div>
+      </div>
+
+      <div class="kpi-card c-green">
+        <div class="kpi-header">
+          <span class="kpi-label">Pending Approvals</span>
+          <div class="kpi-icon">✅</div>
+        </div>
+        <div class="kpi-value" data-val="0">0</div>
+        <div class="kpi-trend warn">—&nbsp; Chờ phê duyệt</div>
+        <div class="kpi-bar"><div class="kpi-bar-fill" data-pct="0"></div></div>
+      </div>
+    </div>
+
+    <!-- BOTTOM GRID -->
+    <div class="section-header">
+      <span class="section-title">Hoạt động</span>
+    </div>
+    <div class="bottom-grid">
+
+      <!-- Recent Documents -->
+      <div class="panel">
+        <div class="panel-head">
+          <span class="panel-title">Recent Documents</span>
+          <span class="panel-action">Xem tất cả →</span>
+        </div>
+        <!-- Sample data for demo; replace with server data -->
+        <table class="doc-table">
+          <thead>
+            <tr>
+              <th>Mã tài liệu</th>
+              <th>Tiêu đề</th>
+              <th>Tiêu chuẩn</th>
+              <th>Trạng thái</th>
+              <th>Cập nhật</th>
+            </tr>
+          </thead>
+          <tbody id="docBody">
+            <!-- empty state rendered by JS -->
+          </tbody>
+        </table>
+        <div class="empty-state" id="docEmpty">
+          <div class="empty-icon">📭</div>
+          <div class="empty-title">Chưa có dữ liệu</div>
+          <div class="empty-desc">Tạo tài liệu ISO đầu tiên để bắt đầu theo dõi tiến độ duyệt.</div>
+          <button class="btn btn-primary" style="margin-top:8px">＋ Tạo tài liệu</button>
+        </div>
+      </div>
+
+      <!-- Pending Workflow -->
+      <div class="panel">
+        <div class="panel-head">
+          <span class="panel-title">Pending Workflow</span>
+          <span class="panel-action">Xem hàng đợi →</span>
+        </div>
+        <div class="empty-state" id="wfEmpty">
+          <div class="empty-icon">⏳</div>
+          <div class="empty-title">Không có task chờ duyệt</div>
+          <div class="empty-desc">Khi có tài liệu gửi phê duyệt, chúng sẽ hiển thị ở đây.</div>
+        </div>
+        <!-- Sample workflow items (hidden when empty) -->
+        <div class="workflow-list" id="wfList" style="display:none">
+          <div class="workflow-item">
+            <div class="wf-icon pending">⏳</div>
+            <div class="wf-body">
+              <div class="wf-title">QMS-PR-001 — Quy trình kiểm tra</div>
+              <div class="wf-meta">Bước 1/2 · <span class="iso-tag">ISO 9001</span> · 2 giờ trước</div>
+            </div>
+          </div>
+          <div class="workflow-item">
+            <div class="wf-icon review">🔍</div>
+            <div class="wf-body">
+              <div class="wf-title">OHS-WI-007 — Hướng dẫn an toàn</div>
+              <div class="wf-meta">Bước 2/2 · <span class="iso-tag">ISO 45001</span> · 5 giờ trước</div>
+            </div>
+          </div>
+          <div class="workflow-item">
+            <div class="wf-icon approved">✔</div>
+            <div class="wf-body">
+              <div class="wf-title">ISM-POL-003 — Chính sách bảo mật</div>
+              <div class="wf-meta">Hoàn tất · <span class="iso-tag">ISO 27001</span> · 1 ngày trước</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+  // Animate bar fills on load
+  window.addEventListener('load', () => {
+    document.querySelectorAll('.kpi-bar-fill').forEach(el => {
+      el.style.width = (el.dataset.pct || 0) + '%';
+    });
+  });
+
+  // Demo: toggle between empty & sample data
+  // Uncomment below to see sample data state
+  /*
+  document.getElementById('docEmpty').style.display = 'none';
+  document.getElementById('docBody').innerHTML = `
+    <tr>
+      <td><span class="doc-code">QMS-PR-001</span></td>
+      <td><span class="doc-title-cell">Quy trình kiểm tra sản phẩm</span></td>
+      <td><span class="iso-tag">ISO 9001</span></td>
+      <td><span class="tag tag-review">Under Review</span></td>
+      <td style="color:var(--muted);font-size:12px">2 giờ trước</td>
+    </tr>
+    <tr>
+      <td><span class="doc-code">OHS-WI-007</span></td>
+      <td><span class="doc-title-cell">Hướng dẫn an toàn vận hành</span></td>
+      <td><span class="iso-tag">ISO 45001</span></td>
+      <td><span class="tag tag-pending">Pending</span></td>
+      <td style="color:var(--muted);font-size:12px">5 giờ trước</td>
+    </tr>
+    <tr>
+      <td><span class="doc-code">ISM-POL-003</span></td>
+      <td><span class="doc-title-cell">Chính sách bảo mật thông tin</span></td>
+      <td><span class="iso-tag">ISO 27001</span></td>
+      <td><span class="tag tag-approved">Published</span></td>
+      <td style="color:var(--muted);font-size:12px">1 ngày trước</td>
+    </tr>
+  `;
+  document.getElementById('wfEmpty').style.display = 'none';
+  document.getElementById('wfList').style.display = 'block';
+  */
+</script>
+</body>
+</html>

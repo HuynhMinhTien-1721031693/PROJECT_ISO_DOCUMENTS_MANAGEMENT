@@ -1,0 +1,35 @@
+@page "/settings"
+@attribute [Authorize]
+@inject IConfiguration Configuration
+
+<h1>Settings</h1>
+<p class="muted">Trang này cho bạn biết ứng dụng Blazor đang gọi API qua địa chỉ nào. Đây là địa chỉ nội bộ ứng dụng dùng để kết nối, không phải link bạn mở trực tiếp trên trình duyệt.</p>
+
+<p style="margin: 12px 0;">
+    <a class="btn secondary" href="/">Dashboard</a>
+    <a class="btn secondary" href="/documents">Danh sách tài liệu</a>
+    <a class="btn secondary" href="/workflow">Workflow</a>
+</p>
+
+<div class="card detail-grid" style="margin-top: 12px;">
+    <div><b>API Base URL:</b> @ApiBaseUrl</div>
+    <div><b>Environment:</b> @EnvironmentName</div>
+    <div class="full" style="line-height: 1.55;">
+        @if (IsDocker)
+        {
+            <p style="margin: 0 0 8px;"><b>Khi chạy Docker:</b> tên host <code>isodoc-api</code> chỉ dùng bên trong mạng Docker (Blazor container gọi sang API container). Vì vậy bạn sẽ không mở trực tiếp URL này từ máy cá nhân.</p>
+            <p style="margin: 0 0 8px;">Để sử dụng hằng ngày: mở giao diện tại <code>http://localhost:5062</code>. Nếu test API bằng Swagger hoặc Postman trên máy host, dùng <code>http://localhost:5075</code>.</p>
+            <p style="margin: 0;"><b>Muốn đổi địa chỉ API:</b> cập nhật <code>src/05_Frontend/IsoDoc.Blazor/appsettings.Docker.json</code>, mục <code>Api:BaseUrl</code>, sao cho đúng với địa chỉ API nhìn từ container Blazor (thường là cổng nội bộ <code>8080</code> trong Compose).</p>
+        }
+        else
+        {
+            <p style="margin: 0 0 8px;"><b>Khi chạy local:</b> sửa <code>appsettings.json</code> để <code>Api:BaseUrl</code> trỏ đúng cổng API bạn đang chạy (thường là <code>http://localhost:5075/api/v1/</code>).</p>
+        }
+    </div>
+</div>
+
+@code {
+    private string ApiBaseUrl => Configuration["Api:BaseUrl"] ?? "(not configured)";
+    private string EnvironmentName => Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production";
+    private bool IsDocker => string.Equals(EnvironmentName, "Docker", StringComparison.OrdinalIgnoreCase);
+}

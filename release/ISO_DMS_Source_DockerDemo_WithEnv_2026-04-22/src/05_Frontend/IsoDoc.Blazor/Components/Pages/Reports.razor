@@ -1,0 +1,165 @@
+@page "/reports"
+@attribute [Authorize(Roles = "SystemAdmin,ISOManager,ISMSOfficer")]
+@using Microsoft.JSInterop
+@inject ComplianceApiService ComplianceApi
+@inject IJSRuntime JS
+
+<div class="page-head">
+    <div>
+        <h1>Báo cáo tuân thủ</h1>
+        <p class="muted">Tài liệu theo trạng thái, SLA vòng phê duyệt và xuất CSV (UTF-8 BOM, mở được bằng Excel).</p>
+    </div>
+</div>
+
+@if (Busy)
+{
+    <p class="tiny">Đang tải...</p>
+}
+else if (!string.IsNullOrWhiteSpace(Error))
+{
+    <p class="error-banner">@Error</p>
+}
+
+<section class="card" style="margin-bottom: 16px;">
+    <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+        <button class="btn secondary" @onclick="DownloadStatusCsvAsync">CSV — tài liệu theo trạng thái</button>
+        <button class="btn secondary" @onclick="DownloadSlaCsvAsync">CSV — SLA phê duyệt</button>
+    </div>
+</section>
+
+<section class="card" style="margin-bottom: 16px;">
+    <h2 style="margin-bottom: 12px;">Tài liệu theo trạng thái</h2>
+    <div class="table-wrap">
+        <table class="simple-table">
+            <thead>
+                <tr><th>Trạng thái</th><th>Số lượng</th></tr>
+            </thead>
+            <tbody>
+                @foreach (var r in StatusRows)
+                {
+                    <tr><td>@r.Status</td><td>@r.Count</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="card">
+    <h2 style="margin-bottom: 12px;">SLA phê duyệt</h2>
+    <div class="filter-grid" style="margin-bottom: 12px;">
+        <label>Hoàn tất từ (UTC, ngày)
+            <InputDate TValue="DateOnly?" @bind-Value="SlaFromDay" class="form-control" />
+        </label>
+        <label>Hoàn tất đến (UTC, ngày)
+            <InputDate TValue="DateOnly?" @bind-Value="SlaToDay" class="form-control" />
+        </label>
+    </div>
+    <button class="btn primary" style="margin-bottom: 12px;" @onclick="ReloadSlaAsync">Áp dụng bộ lọc SLA</button>
+    <div class="table-wrap">
+        <table class="simple-table">
+            <thead>
+                <tr>
+                    <th>Mã TL</th>
+                    <th>Tiêu đề</th>
+                    <th>Trạng thái WF</th>
+                    <th>Bắt đầu (UTC)</th>
+                    <th>Hoàn tất (UTC)</th>
+                    <th>Giờ (đóng)</th>
+                    <th>Giờ (đang mở)</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in SlaRows)
+                {
+                    <tr>
+                        <td>@r.DocumentCode</td>
+                        <td>@r.DocumentTitle</td>
+                        <td>@r.WorkflowStatus</td>
+                        <td class="tiny">@r.StartedAtUtc.ToString("yyyy-MM-dd HH:mm")</td>
+                        <td class="tiny">@(r.CompletedAtUtc?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
+                        <td>@(r.ClosedCycleHours is null ? "—" : $"{r.ClosedCycleHours:F1}")</td>
+                        <td>@(r.OpenWaitingHours is null ? "—" : $"{r.OpenWaitingHours:F1}")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</section>
+
+@code {
+    private IReadOnlyList<DocumentStatusReportItemDto> StatusRows { get; set; } = Array.Empty<DocumentStatusReportItemDto>();
+    private IReadOnlyList<ApprovalSlaReportItemDto> SlaRows { get; set; } = Array.Empty<ApprovalSlaReportItemDto>();
+    private DateOnly? SlaFromDay { get; set; }
+    private DateOnly? SlaToDay { get; set; }
+    private string Error { get; set; } = string.Empty;
+    private bool Busy { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAllAsync();
+    }
+
+    private async Task ReloadAllAsync()
+    {
+        Busy = true;
+        Error = string.Empty;
+        var (status, err1) = await ComplianceApi.GetDocumentStatusReportAsync();
+        var (sla, err2) = await ComplianceApi.GetApprovalSlaReportAsync(SlaCompletedFrom(), SlaCompletedTo());
+        Busy = false;
+        StatusRows = status ?? Array.Empty<DocumentStatusReportItemDto>();
+        SlaRows = sla ?? Array.Empty<ApprovalSlaReportItemDto>();
+        Error = err1 ?? err2 ?? string.Empty;
+    }
+
+    private async Task ReloadSlaAsync()
+    {
+        Busy = true;
+        Error = string.Empty;
+        var (sla, err) = await ComplianceApi.GetApprovalSlaReportAsync(SlaCompletedFrom(), SlaCompletedTo());
+        Busy = false;
+        SlaRows = sla ?? Array.Empty<ApprovalSlaReportItemDto>();
+        Error = err ?? string.Empty;
+    }
+
+    private DateTime? SlaCompletedFrom()
+        => SlaFromDay.HasValue
+            ? DateTime.SpecifyKind(SlaFromDay.Value.ToDateTime(TimeOnly.MinValue), DateTimeKind.Utc)
+            : null;
+
+    private DateTime? SlaCompletedTo()
+        => SlaToDay.HasValue
+            ? DateTime.SpecifyKind(SlaToDay.Value.ToDateTime(new TimeOnly(23, 59, 59)), DateTimeKind.Utc)
+            : null;
+
+    private async Task DownloadStatusCsvAsync()
+    {
+        var (bytes, error) = await ComplianceApi.ExportDocumentStatusCsvAsync();
+        if (error is not null)
+        {
+            Error = error;
+            return;
+        }
+
+        await JS.InvokeVoidAsync(
+            "isoDownloadFile",
+            "document-status.csv",
+            "text/csv;charset=utf-8",
+            Convert.ToBase64String(bytes!));
+    }
+
+    private async Task DownloadSlaCsvAsync()
+    {
+        var (bytes, error) = await ComplianceApi.ExportApprovalSlaCsvAsync(SlaCompletedFrom(), SlaCompletedTo());
+        if (error is not null)
+        {
+            Error = error;
+            return;
+        }
+
+        await JS.InvokeVoidAsync(
+            "isoDownloadFile",
+            "approval-sla.csv",
+            "text/csv;charset=utf-8",
+            Convert.ToBase64String(bytes!));
+    }
+}

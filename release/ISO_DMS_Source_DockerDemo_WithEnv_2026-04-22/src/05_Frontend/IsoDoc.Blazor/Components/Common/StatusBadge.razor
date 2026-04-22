@@ -1,0 +1,15 @@
+<span class="status-chip @CssClass">@Status</span>
+
+@code {
+    [Parameter] public string Status { get; set; } = "Draft";
+
+    private string CssClass => Status switch
+    {
+        "Draft" => "status-draft",
+        "UnderReview" or "PendingFinalApproval" => "status-review",
+        "Published" => "status-published",
+        "Rejected" => "status-rejected",
+        "Archived" => "status-archived",
+        _ => "status-draft"
+    };
+}

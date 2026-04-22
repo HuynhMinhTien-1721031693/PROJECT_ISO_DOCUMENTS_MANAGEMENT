@@ -5,13 +5,13 @@
 <div class="page-head" style="display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;">
     <div>
         <h1>Tài liệu</h1>
-        <p class="muted">Danh sách phân trang, lọc theo trạng thái / ISO / ngày cập nhật (truy vấn DB qua API).</p>
+        <p class="muted">Danh sách tài liệu với bộ lọc theo trạng thái, tiêu chuẩn ISO và ngày cập nhật.</p>
     </div>
     <a class="btn" href="/new-document">Tải lên mới</a>
 </div>
 @if (!Busy && string.IsNullOrWhiteSpace(Error))
 {
-    <p class="tiny" style="margin-bottom:8px;">Tổng <strong>@TotalCount</strong> bản ghi — trang @SearchParams.Page / @TotalPages (@SearchParams.PageSize / trang)</p>
+    <p class="tiny" style="margin-bottom:8px;">Hiển thị <strong>@TotalCount</strong> tài liệu — trang @SearchParams.Page/@TotalPages, @SearchParams.PageSize mục mỗi trang.</p>
 }
 
 <FilterPanel Model="SearchParams" OnApply="LoadAsync" />
@@ -28,9 +28,9 @@ else if (!string.IsNullOrWhiteSpace(Error))
 <DocumentTable Items="DocumentsData" />
 
 <div class="pager">
-    <button class="btn secondary" disabled="@(SearchParams.Page <= 1)" @onclick="PrevPage">Prev</button>
-    <span>Page @SearchParams.Page / @TotalPages</span>
-    <button class="btn secondary" disabled="@(SearchParams.Page >= TotalPages)" @onclick="NextPage">Next</button>
+    <button class="btn secondary" disabled="@(SearchParams.Page <= 1)" @onclick="PrevPage">Trang trước</button>
+    <span>Trang @SearchParams.Page / @TotalPages</span>
+    <button class="btn secondary" disabled="@(SearchParams.Page >= TotalPages)" @onclick="NextPage">Trang sau</button>
 </div>
 
 @code {

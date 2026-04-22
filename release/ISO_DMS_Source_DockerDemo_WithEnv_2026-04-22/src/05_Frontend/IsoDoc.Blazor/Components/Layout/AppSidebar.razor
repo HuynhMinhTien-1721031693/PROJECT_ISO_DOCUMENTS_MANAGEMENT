@@ -1,0 +1,134 @@
+@using System.Security.Claims
+@inject NavigationManager NavigationManager
+@inject AuthService AuthService
+@inject WorkflowApiService WorkflowApiService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<aside class="sidebar">
+    <a href="/" class="iso-logo-link" aria-label="Về Dashboard">
+        <div class="iso-logo-icon" aria-hidden="true">📋</div>
+        <div>
+            <p class="iso-logo-title">ISO DMS</p>
+            <p class="iso-logo-sub">Document Management</p>
+        </div>
+    </a>
+
+    <div class="iso-nav-section">
+        <div class="iso-nav-label">Chính</div>
+        <nav>
+            <NavLink href="/" Match="NavLinkMatch.All">
+                <span class="iso-nav-icon">⊞</span> Dashboard
+            </NavLink>
+            <NavLink href="/documents">
+                <span class="iso-nav-icon">📂</span> Documents
+            </NavLink>
+            <NavLink href="/new-document">
+                <span class="iso-nav-icon">✦</span> New Document
+            </NavLink>
+            <NavLink href="/workflow">
+                <span class="iso-nav-icon">⟳</span> Workflow
+                @if (_pendingWorkflow > 0)
+                {
+                    <span class="iso-nav-badge">@(_pendingWorkflow > 99 ? "99+" : _pendingWorkflow.ToString())</span>
+                }
+            </NavLink>
+        </nav>
+    </div>
+
+    <div class="iso-nav-section">
+        <div class="iso-nav-label">Hệ thống</div>
+        <nav>
+            <AuthorizeView Roles="SystemAdmin,ISOManager,ISMSOfficer">
+                <Authorized>
+                    <NavLink href="/audit">
+                        <span class="iso-nav-icon">📊</span> Audit Log
+                    </NavLink>
+                    <NavLink href="/reports">
+                        <span class="iso-nav-icon">📅</span> Báo cáo tuần
+                    </NavLink>
+                </Authorized>
+            </AuthorizeView>
+            <AuthorizeView Roles="SystemAdmin">
+                <Authorized>
+                    <NavLink href="/admin/users">
+                        <span class="iso-nav-icon">👥</span> Admin — Users
+                    </NavLink>
+                </Authorized>
+            </AuthorizeView>
+            <NavLink href="/settings">
+                <span class="iso-nav-icon">⚙</span> Settings
+            </NavLink>
+        </nav>
+    </div>
+
+    <div class="iso-sidebar-bottom">
+        <div class="iso-user-card">
+            <div class="iso-avatar" title="@_userEmail">@_avatar</div>
+            <div class="iso-user-info">
+                <div class="iso-user-name">@_displayName</div>
+                <div class="iso-user-role">@_roleLabel</div>
+            </div>
+            <button type="button" class="iso-logout-icon" title="Đăng xuất" @onclick="LogoutAsync">↩</button>
+        </div>
+    </div>
+</aside>
+
+@code {
+    private int _pendingWorkflow;
+    private string _userEmail = string.Empty;
+    private string _displayName = string.Empty;
+    private string _roleLabel = "User";
+    private string _avatar = "U";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadUserAsync();
+        await LoadPendingWorkflowAsync();
+    }
+
+    private async Task LoadUserAsync()
+    {
+        var state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var user = state.User;
+        if (user.Identity?.IsAuthenticated != true)
+            return;
+
+        _userEmail = user.FindFirstValue(ClaimTypes.Email)
+                     ?? user.FindFirstValue(ClaimTypes.Name)
+                     ?? user.Identity.Name
+                     ?? "user@local";
+        var given = user.FindFirstValue(ClaimTypes.GivenName);
+        _displayName = string.IsNullOrWhiteSpace(given) ? _userEmail : given;
+        var roles = user.FindAll(ClaimTypes.Role).Select(c => c.Value).Where(r => !string.IsNullOrWhiteSpace(r)).ToList();
+        if (roles.Count > 0)
+            _roleLabel = string.Join(", ", roles.Take(2));
+        _avatar = InitialsFrom(_displayName, _userEmail);
+    }
+
+    private static string InitialsFrom(string display, string email)
+    {
+        var src = display.Contains('@', StringComparison.Ordinal) ? email : display;
+        var local = src.Contains('@', StringComparison.Ordinal) ? src.Split('@')[0] : src;
+        var letters = new string(local.Where(char.IsLetter).ToArray());
+        if (letters.Length >= 2)
+            return (letters[0].ToString() + letters[1]).ToUpperInvariant();
+        if (letters.Length == 1)
+            return (letters[0].ToString() + letters[0]).ToUpperInvariant();
+        if (local.Length >= 2)
+            return local[..2].ToUpperInvariant();
+        return "U";
+    }
+
+    private async Task LoadPendingWorkflowAsync()
+    {
+        var (_, pagination, err) = await WorkflowApiService.GetPendingAsync(1, 1);
+        if (err is null && pagination?.TotalCount is > 0)
+            _pendingWorkflow = pagination.TotalCount;
+    }
+
+    private async Task LogoutAsync()
+    {
+        await AuthService.LogoutAsync();
+        NavigationManager.NavigateTo("/login", forceLoad: true);
+    }
+}

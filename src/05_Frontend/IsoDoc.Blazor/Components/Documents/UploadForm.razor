@@ -3,16 +3,19 @@
     <ValidationSummary />
 
     <div class="upload-grid card">
+        <p class="tiny full" style="margin:0 0 6px 0;">
+            Điền thông tin cơ bản, chọn file đúng định dạng rồi bấm <strong>Tải tài liệu lên</strong>.
+        </p>
         <div class="field">
-            <label>Title</label>
+            <label>Tiêu đề</label>
             <InputText @bind-Value="Model.Title" />
         </div>
         <div class="field">
-            <label>Document Code</label>
+            <label>Mã tài liệu</label>
             <InputText @bind-Value="Model.DocumentCode" />
         </div>
         <div class="field">
-            <label>ISO Standard</label>
+            <label>Tiêu chuẩn ISO</label>
             <InputSelect @bind-Value="Model.Standard">
                 <option>ISO9001</option>
                 <option>ISO45001</option>
@@ -20,7 +23,7 @@
             </InputSelect>
         </div>
         <div class="field">
-            <label>Category</label>
+            <label>Phân loại</label>
             <InputSelect @bind-Value="Model.Category">
                 <option>Policy</option>
                 <option>Procedure</option>
@@ -32,24 +35,25 @@
             </InputSelect>
         </div>
         <div class="field full">
-            <label>Description</label>
+            <label>Mô tả</label>
             <InputTextArea @bind-Value="Model.Description" />
         </div>
         <div class="field full">
-            <label>Change Note</label>
+            <label>Ghi chú thay đổi</label>
             <InputTextArea @bind-Value="Model.ChangeNote" />
         </div>
         <div class="field full">
-            <label>Tags (comma-separated)</label>
+            <label>Từ khóa (cách nhau bằng dấu phẩy)</label>
             <InputText @bind-Value="Model.TagsRaw" />
         </div>
         <div class="field full">
-            <label>File (PDF, DOCX, XLSX; max 50MB)</label>
+            <label>Tệp đính kèm (PDF, DOCX, XLSX; tối đa 50MB)</label>
             <InputFile OnChange="OnFileChange" />
+            <small>@SelectedFileLabel</small>
         </div>
-        @if (!string.IsNullOrWhiteSpace(Error))
+        @if (ShowError && !string.IsNullOrWhiteSpace(DisplayError))
         {
-            <p class="error-banner full">@Error</p>
+            <p class="error-banner full">@DisplayError</p>
         }
         <div class="full">
             <button class="btn" type="submit" disabled="@Busy">@ButtonText</button>
@@ -60,11 +64,17 @@
 @code {
     [Parameter] public UploadFormModel Model { get; set; } = new();
     [Parameter] public bool Busy { get; set; }
+    [Parameter] public bool ShowError { get; set; }
     [Parameter] public string? Error { get; set; }
+    [Parameter] public string? SelectedFileName { get; set; }
     [Parameter] public EventCallback<IBrowserFile?> FileChanged { get; set; }
     [Parameter] public EventCallback OnSubmit { get; set; }
 
-    private string ButtonText => Busy ? "Uploading..." : "Upload Document";
+    private string ButtonText => Busy ? "Đang tải lên..." : "Tải tài liệu lên";
+    private string SelectedFileLabel => string.IsNullOrWhiteSpace(SelectedFileName)
+        ? "Chưa chọn file."
+        : $"Đã chọn: {SelectedFileName}";
+    private string DisplayError => NormalizeError(Error);
 
     private async Task OnFileChange(InputFileChangeEventArgs args)
     {
@@ -73,5 +83,17 @@
     }
 
     private async Task Submit() => await OnSubmit.InvokeAsync();
+
+    private static string NormalizeError(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+            return string.Empty;
+
+        var trimmed = error.Trim();
+        if (string.Equals(trimmed, "Error", StringComparison.OrdinalIgnoreCase))
+            return string.Empty;
+
+        return trimmed;
+    }
 }
 

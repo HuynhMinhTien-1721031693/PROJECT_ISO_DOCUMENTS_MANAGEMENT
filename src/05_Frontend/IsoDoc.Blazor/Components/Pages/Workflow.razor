@@ -2,11 +2,11 @@
 @attribute [Authorize]
 @inject WorkflowApiService WorkflowApiService
 
-<h1>Pending Workflow</h1>
-<p class="muted">Dành cho vai trò approver.</p>
+<h1>Danh sách chờ duyệt</h1>
+<p class="muted">Dành cho người có quyền phê duyệt. Bạn có thể duyệt nhanh ngay tại bảng.</p>
 
 <div class="field" style="max-width:520px;margin-bottom:12px;">
-    <label>Lý do từ chối (dùng khi bấm Reject nhanh tại đây)</label>
+    <label>Lý do từ chối (khi bấm Từ chối nhanh)</label>
     <textarea @bind="RejectComment" rows="2" placeholder="Bắt buộc khi từ chối…"></textarea>
 </div>
 
@@ -19,11 +19,11 @@
     <table class="doc-table">
         <thead>
             <tr>
-                <th>Document</th>
+                <th>Tài liệu</th>
                 <th>ISO</th>
-                <th>Submitted By</th>
-                <th>Step</th>
-                <th>Days Waiting</th>
+                <th>Người gửi</th>
+                <th>Bước duyệt</th>
+                <th>Số ngày chờ</th>
                 <th>Chi tiết</th>
                 <th>Quyết định</th>
             </tr>
@@ -31,7 +31,7 @@
         <tbody>
             @if (Items.Count == 0)
             {
-                <tr><td colspan="7">Không có task workflow.</td></tr>
+                <tr><td colspan="7">Hiện chưa có mục nào chờ duyệt.</td></tr>
             }
             else
             {
@@ -49,8 +49,8 @@
                         <td>@item.DaysWaiting</td>
                         <td><a href="@($"/workflow/{item.WorkflowId}")">Xem</a></td>
                         <td class="workflow-actions">
-                            <button class="btn" disabled="@BusyWorkflowId.HasValue" @onclick='() => Decide(item.WorkflowId, "Approved")'>Approve</button>
-                            <button class="btn secondary" disabled="@BusyWorkflowId.HasValue" @onclick='() => Decide(item.WorkflowId, "Rejected")'>Reject</button>
+                            <button class="btn" disabled="@BusyWorkflowId.HasValue" @onclick='() => Decide(item.WorkflowId, "Approved")'>Duyệt</button>
+                            <button class="btn secondary" disabled="@BusyWorkflowId.HasValue" @onclick='() => Decide(item.WorkflowId, "Rejected")'>Từ chối</button>
                         </td>
                     </tr>
                 }
@@ -81,7 +81,7 @@
     {
         if (decision == "Rejected" && string.IsNullOrWhiteSpace(RejectComment))
         {
-            Error = "Nhập lý do từ chối trước khi reject.";
+            Error = "Vui lòng nhập lý do trước khi từ chối.";
             return;
         }
 
@@ -92,7 +92,7 @@
         var (ok, error) = await WorkflowApiService.DecideAsync(workflowId, decision, comment);
         BusyWorkflowId = null;
         if (!ok)
-            Error = error ?? "Không thể ghi quyết định.";
+            Error = error ?? "Không thể lưu quyết định. Vui lòng thử lại.";
         else
         {
             RejectComment = string.Empty;

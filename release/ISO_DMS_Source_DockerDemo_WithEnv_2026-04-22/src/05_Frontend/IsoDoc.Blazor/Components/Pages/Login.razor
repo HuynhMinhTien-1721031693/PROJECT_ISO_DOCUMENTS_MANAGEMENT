@@ -1,0 +1,73 @@
+@page "/login"
+@layout Layout.EmptyLayout
+@inject AuthService AuthService
+@inject NavigationManager NavigationManager
+@inject AuthenticationStateProvider AuthStateProvider
+
+<div class="login-wrap">
+    <div class="card login-card">
+        <h1>ISO DMS Login</h1>
+        <p class="muted">Đăng nhập để sử dụng hệ thống quản lý tài liệu ISO.</p>
+        <p class="muted" style="font-size: 0.9rem;">
+            Tài khoản mẫu: <strong>admin@local</strong> / <strong>Admin@123</strong>
+        </p>
+
+        <div class="field">
+            <label for="login-email">Email</label>
+            <input id="login-email" type="text" inputmode="email" autocomplete="username" @bind="Email" />
+        </div>
+        <div class="field">
+            <label for="login-password">Password</label>
+            <input id="login-password" type="password" autocomplete="current-password" @bind="Password" />
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(Error))
+        {
+            <p class="error-banner">@Error</p>
+        }
+
+        <button class="btn" disabled="@Busy" @onclick="HandleLoginAsync">
+            @(Busy ? "Signing in..." : "Sign in")
+        </button>
+    </div>
+</div>
+
+@code {
+    private string Email { get; set; } = string.Empty;
+    private string Password { get; set; } = string.Empty;
+    private string Error { get; set; } = string.Empty;
+    private bool Busy { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthStateProvider.GetAuthenticationStateAsync();
+        if (state.User.Identity?.IsAuthenticated == true)
+            NavigationManager.NavigateTo("/");
+    }
+
+    private async Task HandleLoginAsync()
+    {
+        Busy = true;
+        Error = string.Empty;
+        try
+        {
+            var email = Email.Trim();
+            var (ok, error) = await AuthService.LoginAsync(email, Password);
+            if (!ok)
+            {
+                Error = error;
+                return;
+            }
+
+            NavigationManager.NavigateTo("/", forceLoad: true);
+        }
+        catch (HttpRequestException ex)
+        {
+            Error = $"Khong ket noi duoc toi API ({ex.Message}). Kiem tra API dang chay: http://localhost:5075/health va file cau hinh Api:BaseUrl.";
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+}

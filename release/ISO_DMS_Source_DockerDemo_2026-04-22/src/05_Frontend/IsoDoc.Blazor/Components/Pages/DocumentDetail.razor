@@ -1,0 +1,414 @@
+@page "/documents/{Id:guid}"
+@attribute [Authorize]
+@implements IAsyncDisposable
+@inject DocumentApiService DocumentApiService
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject TokenStorageService TokenStorage
+
+<div class="page-head">
+    <div>
+        <h1>Chi tiết tài liệu</h1>
+        <p class="muted"><a href="/documents">← Danh sách tài liệu</a></p>
+    </div>
+</div>
+
+@if (Busy)
+{
+    <p class="tiny">Đang tải chi tiết tài liệu...</p>
+}
+else if (!string.IsNullOrWhiteSpace(Error))
+{
+    <p class="error-banner">@Error</p>
+}
+else if (Document is null)
+{
+    <p>Không tìm thấy tài liệu.</p>
+}
+else
+{
+    <div class="card detail-grid">
+        <div><b>Mã:</b> @Document.DocumentCode</div>
+        <div><b>Tiêu đề:</b> @Document.Title</div>
+        <div><b>ISO:</b> @Document.IsoStandard</div>
+        <div><b>Phân loại:</b> @Document.Category</div>
+        <div><b>Trạng thái:</b> <StatusBadge Status="@Document.Status" /></div>
+        <div><b>Chủ sở hữu:</b> @Document.OwnerName</div>
+        <div><b>Phiên bản hiện tại:</b> @Document.CurrentVersion</div>
+        <div><b>Phòng ban:</b> @Document.DepartmentName</div>
+        <div class="full"><b>Mô tả:</b> @Document.Description</div>
+        <div class="full"><b>Tags:</b> @(Document.Tags.Count == 0 ? "—" : string.Join(", ", Document.Tags))</div>
+    </div>
+
+    <section class="card" style="margin-top: 14px;">
+        <h2 style="margin-bottom: 10px;">Thao tác</h2>
+        <div class="action-row">
+            @if (Document.ActiveWorkflow is { } wf)
+            {
+                <a class="btn secondary" href="@($"/workflow/{wf.WorkflowId}")">Mở workflow phê duyệt</a>
+            }
+            <button type="button" class="btn" disabled="@ActionBusy" @onclick="DownloadLatestAsync">Tải xuống (bản mới nhất)</button>
+            @if (string.Equals(Document.Versions.OrderByDescending(v => v.UploadedAt).FirstOrDefault()?.FileType, "Pdf", StringComparison.OrdinalIgnoreCase))
+            {
+                <button type="button" class="btn secondary" disabled="@ActionBusy" @onclick="PreviewLatestPdfAsync">Xem PDF trong trình duyệt</button>
+            }
+            <AuthorizeView Roles="DocumentController,ISOManager,SystemAdmin">
+                @if (string.Equals(Document.Status, "Draft", StringComparison.OrdinalIgnoreCase))
+                {
+                    <button type="button" class="btn secondary" disabled="@ActionBusy" @onclick="SubmitDraftAsync">Gửi phê duyệt</button>
+                }
+            </AuthorizeView>
+            <AuthorizeView Roles="DocumentController,ISOManager,SystemAdmin">
+                @if (CanUploadNewVersion)
+                {
+                    <button type="button" class="btn secondary" disabled="@ActionBusy" @onclick="() => _showVersionPanel = !_showVersionPanel">Tải lên phiên bản mới</button>
+                }
+            </AuthorizeView>
+            <AuthorizeView Roles="DocumentController,ISOManager,SystemAdmin">
+                @if (!string.Equals(Document.Status, "Archived", StringComparison.OrdinalIgnoreCase))
+                {
+                    <button type="button" class="btn secondary" disabled="@ActionBusy" @onclick="() => _showEditPanel = !_showEditPanel">Sửa thông tin</button>
+                }
+            </AuthorizeView>
+            <AuthorizeView Roles="ISOManager,SystemAdmin">
+                <button type="button" class="btn danger" disabled="@ActionBusy" @onclick="DeleteAsync">Xóa tài liệu</button>
+            </AuthorizeView>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(ActionMessage))
+        {
+            <p class="tiny" style="margin-top: 8px;">@ActionMessage</p>
+        }
+    </section>
+
+    @if (_showEditPanel)
+    {
+        <section class="card" style="margin-top: 14px;">
+            <h3>Cập nhật metadata</h3>
+            <div class="field" style="margin-top: 8px;">
+                <label>Tiêu đề</label>
+                <input class="form-control" @bind="_editTitle" />
+            </div>
+            <div class="field" style="margin-top: 8px;">
+                <label>Mô tả</label>
+                <textarea class="form-control" rows="3" @bind="_editDescription"></textarea>
+            </div>
+            <div class="field" style="margin-top: 8px;">
+                <label>Tags (phân tách bằng dấu phẩy)</label>
+                <input class="form-control" @bind="_editTagsRaw" />
+            </div>
+            <button type="button" class="btn" style="margin-top: 10px;" disabled="@ActionBusy" @onclick="SaveMetadataAsync">Lưu</button>
+        </section>
+    }
+
+    @if (_showVersionPanel && CanUploadNewVersion)
+    {
+        <section class="card" style="margin-top: 14px;">
+            <h3>Phiên bản file mới</h3>
+            <p class="tiny">PDF, DOCX hoặc XLSX — tối đa 50MB. Tài liệu ở trạng thái Published không thể thêm phiên bản từ UI (theo quy tắc nghiệp vụ).</p>
+            <div class="field" style="margin-top: 8px;">
+                <label>Ghi chú thay đổi</label>
+                <textarea class="form-control" rows="2" @bind="_versionChangeNote"></textarea>
+            </div>
+            <div class="field" style="margin-top: 8px;">
+                <label>File</label>
+                <InputFile OnChange="OnVersionFileSelected" />
+            </div>
+            <button type="button" class="btn" style="margin-top: 10px;" disabled="@ActionBusy" @onclick="UploadNewVersionAsync">Upload phiên bản</button>
+        </section>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(_pdfPreviewUrl))
+    {
+        <section class="card" style="margin-top: 14px;">
+            <h3>Xem trước PDF</h3>
+            <iframe title="PDF preview" src="@_pdfPreviewUrl" style="width:100%;min-height:640px;border:1px solid #ddd;border-radius:6px;"></iframe>
+        </section>
+    }
+
+    <section class="card" style="margin-top: 14px;">
+        <h2 style="margin-bottom: 8px;">Lịch sử phiên bản file</h2>
+        <p class="tiny">Checksum SHA-256, kích thước và loại MIME khớp với dữ liệu đã lưu trên server.</p>
+        <ul class="simple-list">
+            @if (Document.Versions.Count == 0)
+            {
+                <li>Chưa có phiên bản file.</li>
+            }
+            else
+            {
+                @foreach (var version in Document.Versions.OrderByDescending(v => v.UploadedAt))
+                {
+                    <li>
+                        <div>
+                            <b>@version.OriginalFileName</b>
+                            <span class="tiny"> (@version.FileType · @version.ContentType)</span>
+                            <div class="tiny">@version.UploadedByName • @version.UploadedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</div>
+                            <div class="tiny mono">SHA-256: @FormatChecksum(version.ChecksumHex)</div>
+                            @if (!string.IsNullOrWhiteSpace(version.ChangeNote))
+                            {
+                                <div class="tiny">Ghi chú: @version.ChangeNote</div>
+                            }
+                        </div>
+                        <div class="version-actions">
+                            <span>@version.FileSizeFormatted (@version.FileSize bytes)</span>
+                            <button type="button" class="btn tiny secondary" disabled="@ActionBusy" @onclick="() => DownloadVersionAsync(version.Id)">Tải</button>
+                            @if (string.Equals(version.FileType, "Pdf", StringComparison.OrdinalIgnoreCase))
+                            {
+                                <button type="button" class="btn tiny secondary" disabled="@ActionBusy" @onclick="() => PreviewPdfAsync(version.Id)">Xem PDF</button>
+                            }
+                        </div>
+                    </li>
+                }
+            }
+        </ul>
+    </section>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private DocumentDto? Document { get; set; }
+    private string Error { get; set; } = string.Empty;
+    private string ActionMessage { get; set; } = string.Empty;
+    private bool Busy { get; set; }
+    private bool ActionBusy { get; set; }
+
+    private bool _showEditPanel;
+    private bool _showVersionPanel;
+    private string _editTitle = string.Empty;
+    private string _editDescription = string.Empty;
+    private string _editTagsRaw = string.Empty;
+    private string _versionChangeNote = string.Empty;
+    private IBrowserFile? _versionFile;
+
+    private string? _pdfPreviewUrl;
+
+    private bool CanUploadNewVersion =>
+        Document is not null
+        && !string.Equals(Document.Status, "Published", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(Document.Status, "Archived", StringComparison.OrdinalIgnoreCase);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        Busy = true;
+        Error = string.Empty;
+        ActionMessage = string.Empty;
+        var (item, error) = await DocumentApiService.GetByIdAsync(Id);
+        Busy = false;
+        Document = item;
+        Error = string.IsNullOrWhiteSpace(error) ? string.Empty : ApiProblemMessageFormatter.Format(error);
+        if (Document is not null)
+        {
+            _editTitle = Document.Title;
+            _editDescription = Document.Description ?? string.Empty;
+            _editTagsRaw = Document.Tags.Count == 0 ? string.Empty : string.Join(", ", Document.Tags);
+        }
+    }
+
+    private static string FormatChecksum(string hex)
+    {
+        if (string.IsNullOrWhiteSpace(hex) || hex.Length <= 24)
+            return hex;
+        return $"{hex[..16]}…{hex[^8..]}";
+    }
+
+    private async Task DownloadLatestAsync() => await DownloadVersionAsync(null);
+
+    private async Task DownloadVersionAsync(Guid? versionId)
+    {
+        ActionBusy = true;
+        ActionMessage = string.Empty;
+        try
+        {
+            var (info, err) = await DocumentApiService.GetDownloadInfoAsync(Id, versionId);
+            if (!string.IsNullOrWhiteSpace(err))
+            {
+                ActionMessage = err;
+                return;
+            }
+
+            if (info is null)
+            {
+                ActionMessage = "Không lấy được thông tin tải xuống.";
+                return;
+            }
+
+            if (string.Equals(info.Mode, "Sas", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(info.SasUrl))
+            {
+                await JS.InvokeVoidAsync("isoDocFileTransfer.openInNewTab", info.SasUrl);
+                ActionMessage = "Đã mở liên kết tải xuống (SAS).";
+                return;
+            }
+
+            var token = (await TokenStorage.GetTokensAsync())?.AccessToken ?? string.Empty;
+            var url = DocumentApiService.GetAuthorizedFileUrl(Id, versionId);
+            var blobUrl = await JS.InvokeAsync<string>("isoDocFileTransfer.fetchAuthorizedAsBlobUrl", url, token);
+            await JS.InvokeVoidAsync("isoDocFileTransfer.downloadBlobUrl", blobUrl, info.FileName);
+            await JS.InvokeVoidAsync("isoDocFileTransfer.revokeBlobUrl", blobUrl);
+            ActionMessage = "Đã bắt đầu tải xuống.";
+        }
+        catch (JSException jx)
+        {
+            ActionMessage = ApiProblemMessageFormatter.Format(jx.Message);
+        }
+        finally
+        {
+            ActionBusy = false;
+        }
+    }
+
+    private async Task PreviewLatestPdfAsync()
+    {
+        var latest = Document?.Versions.OrderByDescending(v => v.UploadedAt).FirstOrDefault();
+        if (latest is null)
+            return;
+        await PreviewPdfAsync(latest.Id);
+    }
+
+    private async Task PreviewPdfAsync(Guid versionId)
+    {
+        await ClearPreviewAsync();
+        ActionBusy = true;
+        ActionMessage = string.Empty;
+        try
+        {
+            var token = (await TokenStorage.GetTokensAsync())?.AccessToken ?? string.Empty;
+            var url = DocumentApiService.GetAuthorizedFileUrl(Id, versionId);
+            _pdfPreviewUrl = await JS.InvokeAsync<string>("isoDocFileTransfer.fetchAuthorizedAsBlobUrl", url, token);
+            ActionMessage = "Đã tải PDF để xem trong trang (blob URL).";
+        }
+        catch (JSException jx)
+        {
+            ActionMessage = ApiProblemMessageFormatter.Format(jx.Message);
+        }
+        finally
+        {
+            ActionBusy = false;
+        }
+    }
+
+    private Task OnVersionFileSelected(InputFileChangeEventArgs args)
+    {
+        _versionFile = args.File;
+        return Task.CompletedTask;
+    }
+
+    private async Task UploadNewVersionAsync()
+    {
+        ActionMessage = string.Empty;
+        if (_versionFile is null)
+        {
+            ActionMessage = "Vui lòng chọn file.";
+            return;
+        }
+
+        var ext = Path.GetExtension(_versionFile.Name).ToLowerInvariant();
+        if (ext is not (".pdf" or ".docx" or ".xlsx"))
+        {
+            ActionMessage = "Chỉ chấp nhận PDF, DOCX hoặc XLSX.";
+            return;
+        }
+
+        if (_versionFile.Size > 50 * 1024 * 1024)
+        {
+            ActionMessage = "File vượt quá 50MB.";
+            return;
+        }
+
+        ActionBusy = true;
+        await using var stream = _versionFile.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024);
+        var (versionId, err) = await DocumentApiService.AddVersionAsync(
+            Id,
+            stream,
+            _versionFile.Name,
+            _versionFile.ContentType,
+            _versionChangeNote);
+
+        ActionBusy = false;
+        if (!string.IsNullOrWhiteSpace(err))
+        {
+            ActionMessage = err;
+            return;
+        }
+
+        _versionFile = null;
+        _versionChangeNote = string.Empty;
+        _showVersionPanel = false;
+        ActionMessage = $"Đã tạo phiên bản mới ({versionId}).";
+        await ReloadAsync();
+    }
+
+    private async Task SaveMetadataAsync()
+    {
+        ActionBusy = true;
+        ActionMessage = string.Empty;
+        var tags = _editTagsRaw
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToArray();
+        var (ok, err) = await DocumentApiService.UpdateMetadataAsync(Id, _editTitle, _editDescription, tags);
+        ActionBusy = false;
+        if (!ok)
+        {
+            ActionMessage = err ?? "Cập nhật thất bại.";
+            return;
+        }
+
+        _showEditPanel = false;
+        ActionMessage = "Đã cập nhật thông tin tài liệu.";
+        await ReloadAsync();
+    }
+
+    private async Task SubmitDraftAsync()
+    {
+        ActionBusy = true;
+        ActionMessage = string.Empty;
+        var (_, err) = await DocumentApiService.SubmitForApprovalAsync(Id);
+        ActionBusy = false;
+        if (!string.IsNullOrWhiteSpace(err))
+        {
+            ActionMessage = err;
+            return;
+        }
+
+        ActionMessage = "Đã gửi phê duyệt.";
+        await ReloadAsync();
+    }
+
+    private async Task DeleteAsync()
+    {
+        ActionBusy = true;
+        ActionMessage = string.Empty;
+        var (ok, err) = await DocumentApiService.DeleteAsync(Id);
+        ActionBusy = false;
+        if (!ok)
+        {
+            ActionMessage = err ?? "Xóa thất bại.";
+            return;
+        }
+
+        Navigation.NavigateTo("/documents");
+    }
+
+    private async Task ClearPreviewAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(_pdfPreviewUrl))
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("isoDocFileTransfer.revokeBlobUrl", _pdfPreviewUrl);
+            }
+            catch
+            {
+                // ignore
+            }
+
+            _pdfPreviewUrl = null;
+        }
+    }
+
+    public async ValueTask DisposeAsync() => await ClearPreviewAsync();
+}

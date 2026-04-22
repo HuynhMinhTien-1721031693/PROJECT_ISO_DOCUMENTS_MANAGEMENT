@@ -9,7 +9,7 @@
         <div class="iso-logo-icon" aria-hidden="true">📋</div>
         <div>
             <p class="iso-logo-title">ISO DMS</p>
-            <p class="iso-logo-sub">Document Management</p>
+            <p class="iso-logo-sub">Quản lý tài liệu</p>
         </div>
     </a>
 
@@ -17,16 +17,16 @@
         <div class="iso-nav-label">Chính</div>
         <nav>
             <NavLink href="/" Match="NavLinkMatch.All">
-                <span class="iso-nav-icon">⊞</span> Dashboard
+                <span class="iso-nav-icon">⊞</span> Bảng điều khiển
             </NavLink>
             <NavLink href="/documents">
-                <span class="iso-nav-icon">📂</span> Documents
+                <span class="iso-nav-icon">📂</span> Tài liệu
             </NavLink>
             <NavLink href="/new-document">
-                <span class="iso-nav-icon">✦</span> New Document
+                <span class="iso-nav-icon">✦</span> Tạo tài liệu mới
             </NavLink>
             <NavLink href="/workflow">
-                <span class="iso-nav-icon">⟳</span> Workflow
+                <span class="iso-nav-icon">⟳</span> Luồng duyệt
                 @if (_pendingWorkflow > 0)
                 {
                     <span class="iso-nav-badge">@(_pendingWorkflow > 99 ? "99+" : _pendingWorkflow.ToString())</span>
@@ -41,7 +41,7 @@
             <AuthorizeView Roles="SystemAdmin,ISOManager,ISMSOfficer">
                 <Authorized>
                     <NavLink href="/audit">
-                        <span class="iso-nav-icon">📊</span> Audit Log
+                        <span class="iso-nav-icon">📊</span> Nhật ký hệ thống
                     </NavLink>
                     <NavLink href="/reports">
                         <span class="iso-nav-icon">📅</span> Báo cáo tuần
@@ -51,12 +51,12 @@
             <AuthorizeView Roles="SystemAdmin">
                 <Authorized>
                     <NavLink href="/admin/users">
-                        <span class="iso-nav-icon">👥</span> Admin — Users
+                        <span class="iso-nav-icon">👥</span> Quản trị — Người dùng
                     </NavLink>
                 </Authorized>
             </AuthorizeView>
             <NavLink href="/settings">
-                <span class="iso-nav-icon">⚙</span> Settings
+                <span class="iso-nav-icon">⚙</span> Cài đặt
             </NavLink>
         </nav>
     </div>
@@ -77,7 +77,7 @@
     private int _pendingWorkflow;
     private string _userEmail = string.Empty;
     private string _displayName = string.Empty;
-    private string _roleLabel = "User";
+    private string _roleLabel = "Người dùng";
     private string _avatar = "U";
 
     protected override async Task OnInitializedAsync()

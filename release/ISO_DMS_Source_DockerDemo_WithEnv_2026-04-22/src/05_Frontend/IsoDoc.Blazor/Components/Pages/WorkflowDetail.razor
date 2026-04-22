@@ -1,0 +1,132 @@
+@page "/workflow/{WorkflowId:guid}"
+@attribute [Authorize]
+@inject WorkflowApiService WorkflowApiService
+@inject NavigationManager Navigation
+
+<h1>Chi tiết phê duyệt</h1>
+@if (!string.IsNullOrWhiteSpace(Error))
+{
+    <p class="error-banner">@Error</p>
+}
+else if (Detail is null)
+{
+    <p>Đang tải…</p>
+}
+else
+{
+    <p class="muted">
+        <a href="/workflow">← Danh sách chờ</a>
+        · <a href="/documents/@Detail.DocumentId">Mở tài liệu</a>
+    </p>
+    <div class="card" style="margin-bottom:12px;">
+        <h2>@Detail.DocumentCode — @Detail.DocumentTitle</h2>
+        <p>Trạng thái workflow: <strong>@Detail.Workflow.Status</strong></p>
+        <p>Bắt đầu: @Detail.Workflow.StartedAt.ToLocalTime().ToString("g")</p>
+        @if (Detail.Workflow.CompletedAt is { } done)
+        {
+            <p>Hoàn tất: @done.ToLocalTime().ToString("g")</p>
+        }
+        @if (!string.IsNullOrWhiteSpace(Detail.Workflow.CurrentApproverName))
+        {
+            <p>Người phê duyệt hiện tại: @Detail.Workflow.CurrentApproverName</p>
+        }
+    </div>
+
+    <div class="card">
+        <h2>Các bước &amp; quyết định</h2>
+        <table class="doc-table">
+            <thead>
+                <tr>
+                    <th>Bước</th>
+                    <th>Người phê duyệt</th>
+                    <th>Quyết định</th>
+                    <th>Ghi chú / lý do</th>
+                    <th>Thời điểm</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var s in Detail.Workflow.Steps.OrderBy(x => x.StepOrder))
+                {
+                    <tr>
+                        <td>@s.StepOrder / @Detail.Workflow.TotalSteps</td>
+                        <td>@s.ApproverName</td>
+                        <td>@s.Decision</td>
+                        <td>@(string.IsNullOrWhiteSpace(s.Comment) ? "—" : s.Comment)</td>
+                        <td>@(s.DecidedAt?.ToLocalTime().ToString("g") ?? "—")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    @if (Detail.Workflow.Status == "InProgress")
+    {
+        <div class="card">
+            <h2>Quyết định nhanh</h2>
+            <div class="field">
+                <label>Ghi chú (bắt buộc khi từ chối)</label>
+                <textarea @bind="Comment" rows="3"></textarea>
+            </div>
+            <p style="margin-top:10px;">
+                <button class="btn" disabled="@Busy" @onclick="ApproveAsync">Phê duyệt</button>
+                <button class="btn secondary" disabled="@Busy" @onclick="RejectAsync">Từ chối</button>
+            </p>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public Guid WorkflowId { get; set; }
+
+    private WorkflowDetailDto? Detail { get; set; }
+    private string Error { get; set; } = string.Empty;
+    private string Comment { get; set; } = string.Empty;
+    private bool Busy { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var (d, err) = await WorkflowApiService.GetDetailAsync(WorkflowId);
+        if (err is not null)
+        {
+            Detail = null;
+            Error = err;
+            return;
+        }
+
+        Detail = d;
+        Error = string.Empty;
+    }
+
+    private async Task ApproveAsync()
+    {
+        Busy = true;
+        var (ok, err) = await WorkflowApiService.DecideAsync(WorkflowId, "Approved", Comment);
+        Busy = false;
+        if (!ok)
+            Error = err ?? "Lỗi.";
+        else
+            await LoadAsync();
+    }
+
+    private async Task RejectAsync()
+    {
+        if (string.IsNullOrWhiteSpace(Comment))
+        {
+            Error = "Vui lòng nhập lý do từ chối.";
+            return;
+        }
+
+        Busy = true;
+        var (ok, err) = await WorkflowApiService.DecideAsync(WorkflowId, "Rejected", Comment);
+        Busy = false;
+        if (!ok)
+            Error = err ?? "Lỗi.";
+        else
+            Navigation.NavigateTo("/workflow");
+    }
+}

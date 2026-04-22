@@ -1,0 +1,1134 @@
+
+
+
+ISO DMS V3
+Phần 1: Domain Layer
+IsoDoc.Domain — Clean Architecture Core
+
+
+11 Source Files	Không dependency ngoài MediatR
+ 
+1. Tổng quan Domain Layer
+Domain Layer là lõi của Clean Architecture. Chứa toàn bộ business logic, entities, value objects, domain events và interfaces (ports). Không được import bất kỳ package infrastructure nào (EF Core, Azure SDK, v.v.).
+
+Dependency rule:
+•	IsoDoc.Domain KHÔNG phụ thuộc project nào khác trong solution
+•	Chỉ reference duy nhất: MediatR.Contracts (cho IDomainEvent : INotification)
+•	Application, Infrastructure, WebAPI đều phụ thuộc vào Domain — không ngược lại
+
+1.1  Cấu trúc thư mục
+IsoDoc.Domain/
+├── Common/
+│   ├── BaseEntity.cs              ← Id (GUID) + domain events list
+│   ├── BaseAuditableEntity.cs     ← + CreatedAt, UpdatedAt, SoftDelete
+│   └── IDomainEvent.cs            ← Marker interface + DomainEventBase record
+├── Enums/
+│   └── DocumentEnums.cs           ← DocumentStatus, IsoStandard, WorkflowDecision...
+├── ValueObjects/
+│   └── DocumentValueObjects.cs    ← DocumentCode, VersionNumber, FileChecksum
+├── Entities/
+│   ├── Document.cs                ← Aggregate root (state machine)
+│   ├── DocumentVersion.cs         ← File version owned by Document
+│   └── ApprovalWorkflow.cs        ← Workflow + ApprovalStep
+├── Events/
+│   └── DocumentEvents.cs          ← All domain event records
+├── Interfaces/
+│   └── IRepositories.cs           ← Repository + service ports
+└── Exceptions/
+    └── DomainExceptions.cs        ← DomainException hierarchy
+ 
+2. Common — BaseEntity & BaseAuditableEntity
+Tất cả entities đều kế thừa từ BaseAuditableEntity. Sử dụng GUID thay ID tuần tự để tránh lộ thông tin qua URL và hỗ trợ distributed systems.
+
+2.1  BaseEntity.cs
+namespace IsoDoc.Domain.Common;
+
+/// <summary>
+/// Base class for all domain entities.
+/// Uses GUID as primary key to avoid sequential integer IDs being exposed in URLs.
+/// </summary>
+public abstract class BaseEntity
+{
+    private readonly List<IDomainEvent> _domainEvents = new();
+
+    public Guid Id { get; protected set; } = Guid.NewGuid();
+
+    public IReadOnlyCollection<IDomainEvent> DomainEvents => _domainEvents.AsReadOnly();
+
+    protected void AddDomainEvent(IDomainEvent domainEvent)
+        => _domainEvents.Add(domainEvent);
+
+    public void ClearDomainEvents()
+        => _domainEvents.Clear();
+}
+
+
+2.2  BaseAuditableEntity.cs
+namespace IsoDoc.Domain.Common;
+
+/// <summary>
+/// Extends BaseEntity with audit trail fields required by ISO 27001.
+/// All timestamps stored as UTC. Soft delete pattern: IsDeleted flag + DeletedAt.
+/// </summary>
+public abstract class BaseAuditableEntity : BaseEntity
+{
+    public DateTime CreatedAt  { get; set; } = DateTime.UtcNow;
+    public Guid?    CreatedBy  { get; set; }
+    public DateTime UpdatedAt  { get; set; } = DateTime.UtcNow;
+    public Guid?    UpdatedBy  { get; set; }
+    public bool     IsDeleted  { get; set; } = false;
+    public DateTime? DeletedAt { get; set; }
+    public Guid?    DeletedBy  { get; set; }
+
+    public void SoftDelete(Guid deletedBy)
+    {
+        IsDeleted = true;
+        DeletedAt = DateTime.UtcNow;
+        DeletedBy = deletedBy;
+    }
+}
+
+
+2.3  IDomainEvent.cs
+Domain events dùng MediatR INotification để dispatch sau khi SaveChanges() thành công. Không dispatch trong transaction.
+using MediatR;
+
+namespace IsoDoc.Domain.Common;
+
+/// <summary>
+/// Marker interface for domain events.
+/// Implements MediatR INotification so handlers can be registered
+/// and dispatched automatically via the MediatR pipeline.
+/// </summary>
+public interface IDomainEvent : INotification
+{
+    Guid EventId    { get; }
+    DateTime OccurredAt { get; }
+}
+
+/// <summary>
+/// Convenience base record for domain events.
+/// Records are ideal: immutable, value-equality, compact syntax.
+/// </summary>
+public abstract record DomainEventBase : IDomainEvent
+{
+    public Guid     EventId     { get; } = Guid.NewGuid();
+    public DateTime OccurredAt  { get; } = DateTime.UtcNow;
+}
+
+ 
+3. Enums
+Enums thay thế magic strings. Lưu vào DB dưới dạng int — thêm description vào comments để dễ migrate sau.
+
+namespace IsoDoc.Domain.Enums;
+
+/// <summary>
+/// Document lifecycle states.
+/// State transitions enforced in Document entity methods.
+///
+///   Draft → UnderReview → PendingFinalApproval → Published → Archived
+///                ↓                  ↓
+///           Rejected ←←←←←←←←←←←←←←←←←←←←←←←
+/// </summary>
+public enum DocumentStatus
+{
+    Draft               = 1,
+    UnderReview         = 2,
+    PendingFinalApproval = 3,
+    Published           = 4,
+    Rejected            = 5,
+    Archived            = 6
+}
+
+/// <summary>
+/// ISO standard scope. Documents are tagged with exactly one standard.
+/// RBAC roles are also scoped per standard (e.g., QAOfficer can only manage ISO9001 docs).
+/// </summary>
+public enum IsoStandard
+{
+    ISO9001  = 1,   // Quality Management
+    ISO45001 = 2,   // Occupational Health & Safety
+    ISO27001 = 3    // Information Security
+}
+
+/// <summary>
+/// Document type / category for classification and search filtering.
+/// </summary>
+public enum DocumentCategory
+{
+    Policy       = 1,   // High-level intent and direction
+    Procedure    = 2,   // Step-by-step instructions
+    WorkInstruction = 3,// Detailed task-level guidance
+    Form         = 4,   // Templates / checklists
+    Record       = 5,   // Evidence of compliance
+    Manual       = 6,   // Comprehensive reference document
+    Specification = 7   // Technical requirements
+}
+
+/// <summary>
+/// Decision recorded at each approval step.
+/// </summary>
+public enum WorkflowDecision
+{
+    Pending  = 0,
+    Approved = 1,
+    Rejected = 2
+}
+
+/// <summary>
+/// Supported file types for document uploads.
+/// </summary>
+public enum DocumentFileType
+{
+    Pdf  = 1,
+    Docx = 2,
+    Xlsx = 3,
+    Pptx = 4
+}
+
+
+3.1  DocumentStatus — State transitions
+Từ trạng thái	Sang trạng thái	Điều kiện
+Draft	UnderReview	Có ít nhất 1 file đã upload
+UnderReview	PendingFinalApproval	QA/Safety Officer approve
+PendingFinalApproval	Published	ISO Manager approve
+UnderReview	Rejected	QA/Safety Officer reject
+PendingFinalApproval	Rejected	ISO Manager reject
+Rejected	Draft	Owner kéo về để sửa
+Published	Archived	Bị supersede bởi version mới hơn
+ 
+4. Value Objects
+Value objects: immutable, equality theo value (không phải ID), không có identity riêng. Enforce business rules tại constructor/factory.
+
+4.1  DocumentCode — Format: PREFIX-TYPE-NNN
+•	Valid: QMS-PR-001, ISMS-POL-003, OHS-WI-012
+•	Invalid: qms-pr-001 (lowercase), QMS-PR-1 (thiếu digit), QMS001 (thiếu dash)
+•	Regex: ^[A-Z]{2,6}-[A-Z]{2,4}-\d{3}$
+
+4.2  VersionNumber — Semantic versioning
+•	BumpMinor(): 1.2 → 1.3 (minor edit, QA Officer approves)
+•	BumpMajor(): 1.2 → 2.0 (major structural change, ISO Manager approves)
+•	Initial: 1.0 (mọi document mới bắt đầu ở v1.0)
+
+4.3  FileChecksum — SHA-256 (ISO 27001)
+•	Tính checksum khi upload, lưu vào DB
+•	Verify lại khi download: VerifyIntegrity(fileBytes)
+•	Nếu checksum không khớp → alert + audit log
+
+using System.Security.Cryptography;
+using System.Text.RegularExpressions;
+
+namespace IsoDoc.Domain.ValueObjects;
+
+/// <summary>
+/// Strongly-typed document code enforcing format: [PREFIX]-[TYPE]-[NUMBER]
+/// Examples: QMS-PR-001, ISMS-POL-003, OHS-WI-012
+/// Value object: immutable, equality by value, no identity.
+/// </summary>
+public sealed class DocumentCode : IEquatable<DocumentCode>
+{
+    // Format: 2-6 uppercase letters, dash, 2-4 uppercase letters, dash, 3 digits
+    private static readonly Regex _format = new(@"^[A-Z]{2,6}-[A-Z]{2,4}-\d{3}$",
+        RegexOptions.Compiled);
+
+    public string Value { get; }
+
+    private DocumentCode(string value) => Value = value;
+
+    public static DocumentCode Create(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException("Document code cannot be empty.", nameof(value));
+
+        var normalised = value.Trim().ToUpperInvariant();
+        if (!_format.IsMatch(normalised))
+            throw new ArgumentException(
+                $"Document code '{value}' must match format: PREFIX-TYPE-NNN (e.g. QMS-PR-001).",
+                nameof(value));
+
+        return new DocumentCode(normalised);
+    }
+
+    public override string ToString() => Value;
+    public bool Equals(DocumentCode? other) => other is not null && Value == other.Value;
+    public override bool Equals(object? obj) => obj is DocumentCode dc && Equals(dc);
+    public override int GetHashCode() => Value.GetHashCode(StringComparison.Ordinal);
+    public static implicit operator string(DocumentCode code) => code.Value;
+}
+
+/// <summary>
+/// Semantic version number for documents.
+/// Major version increments on structural changes (approved by ISOManager).
+/// Minor version increments on non-structural edits (approved by QAOfficer).
+/// </summary>
+public sealed class VersionNumber : IEquatable<VersionNumber>, IComparable<VersionNumber>
+{
+    public int Major { get; }
+    public int Minor { get; }
+
+    private VersionNumber(int major, int minor)
+    {
+        Major = major;
+        Minor = minor;
+    }
+
+    public static VersionNumber Initial => new(1, 0);
+
+    public static VersionNumber Create(string version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+            throw new ArgumentException("Version cannot be empty.", nameof(version));
+
+        var parts = version.Split('.');
+        if (parts.Length != 2
+            || !int.TryParse(parts[0], out var major) || major < 1
+            || !int.TryParse(parts[1], out var minor) || minor < 0)
+            throw new ArgumentException(
+                $"Version '{version}' must be in format MAJOR.MINOR (e.g. 1.0, 2.3).",
+                nameof(version));
+
+        return new VersionNumber(major, minor);
+    }
+
+    /// <summary>Bumps minor: 1.2 → 1.3</summary>
+    public VersionNumber BumpMinor() => new(Major, Minor + 1);
+
+    /// <summary>Bumps major and resets minor: 1.2 → 2.0</summary>
+    public VersionNumber BumpMajor() => new(Major + 1, 0);
+
+    public override string ToString() => $"{Major}.{Minor}";
+    public bool Equals(VersionNumber? other) => other is not null && Major == other.Major && Minor == other.Minor;
+    public override bool Equals(object? obj) => obj is VersionNumber v && Equals(v);
+    public override int GetHashCode() => HashCode.Combine(Major, Minor);
+    public int CompareTo(VersionNumber? other)
+    {
+        if (other is null) return 1;
+        var majorComp = Major.CompareTo(other.Major);
+        return majorComp != 0 ? majorComp : Minor.CompareTo(other.Minor);
+    }
+    public static implicit operator string(VersionNumber v) => v.ToString();
+}
+
+/// <summary>
+/// SHA-256 checksum for file integrity verification (ISO 27001 requirement).
+/// Prevents tampering with stored documents.
+/// </summary>
+public sealed class FileChecksum : IEquatable<FileChecksum>
+{
+    public string Value { get; }
+
+    private FileChecksum(string value) => Value = value;
+
+    public static FileChecksum FromBytes(byte[] fileContent)
+    {
+        ArgumentNullException.ThrowIfNull(fileContent);
+        var hash = SHA256.HashData(fileContent);
+        return new FileChecksum(Convert.ToHexString(hash).ToLowerInvariant());
+    }
+
+    public static FileChecksum FromHexString(string hex)
+    {
+        if (string.IsNullOrWhiteSpace(hex) || hex.Length != 64)
+            throw new ArgumentException("Checksum must be a 64-character hex string.", nameof(hex));
+        return new FileChecksum(hex.ToLowerInvariant());
+    }
+
+    public bool Verify(byte[] fileContent)
+        => Value == Convert.ToHexString(SHA256.HashData(fileContent)).ToLowerInvariant();
+
+    public override string ToString() => Value;
+    public bool Equals(FileChecksum? other) => other is not null && Value == other.Value;
+    public override bool Equals(object? obj) => obj is FileChecksum fc && Equals(fc);
+    public override int GetHashCode() => Value.GetHashCode(StringComparison.Ordinal);
+}
+
+ 
+5. Entities
+5.1  Document — Aggregate Root
+Document là aggregate root. Mọi thay đổi về state phải đi qua Document methods — không gán trực tiếp properties từ bên ngoài (private setters).
+
+Key design decisions:
+•	Factory method Create() thay constructor — đảm bảo document luôn valid khi khởi tạo
+•	State machine methods: SubmitForReview(), AdvanceToFinalApproval(), Publish(), Reject(), Archive()
+•	AddVersion() kiểm tra status trước khi cho phép upload
+•	Domain events raised tự động trong methods — không cần caller tự raise
+
+using IsoDoc.Domain.Common;
+using IsoDoc.Domain.Enums;
+using IsoDoc.Domain.Events;
+using IsoDoc.Domain.Exceptions;
+using IsoDoc.Domain.ValueObjects;
+
+namespace IsoDoc.Domain.Entities;
+
+/// <summary>
+/// Document aggregate root — the central entity of the entire domain.
+///
+/// Responsibilities:
+/// 1. Enforces all business invariants (status transitions, ownership)
+/// 2. Owns a collection of DocumentVersions (one-to-many, loaded as needed)
+/// 3. Raises domain events when significant state changes occur
+/// 4. Exposes factory method Create() instead of public constructor
+///    to guarantee objects are always created in a valid state
+///
+/// State machine:
+///   Draft → UnderReview → PendingFinalApproval → Published → Archived
+///               ↓                  ↓
+///           Rejected ←←←←←←←←←←←←←
+/// </summary>
+public sealed class Document : BaseAuditableEntity
+{
+    // ── Private backing fields ───────────────────────────────────────────
+    private readonly List<DocumentVersion> _versions = new();
+
+    // ── Properties (private setters — only changed via methods) ─────────
+    public string             Title        { get; private set; } = string.Empty;
+    public DocumentCode       Code         { get; private set; } = null!;
+    public IsoStandard        Standard     { get; private set; }
+    public DocumentCategory   Category     { get; private set; }
+    public DocumentStatus     Status       { get; private set; }
+    public VersionNumber      CurrentVersion { get; private set; } = null!;
+    public Guid               OwnerId      { get; private set; }
+    public Guid               DepartmentId { get; private set; }
+    public string?            Description  { get; private set; }
+    public IReadOnlyList<string> Tags      { get; private set; } = new List<string>();
+
+    // Navigation property (EF Core loads this)
+    public IReadOnlyCollection<DocumentVersion> Versions => _versions.AsReadOnly();
+
+    // Private constructor — use Create() factory method
+    private Document() { }
+
+    // ── Factory method ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Creates a new document in Draft status.
+    /// Raises DocumentCreatedEvent.
+    /// </summary>
+    public static Document Create(
+        string            title,
+        string            code,
+        IsoStandard       standard,
+        DocumentCategory  category,
+        Guid              ownerId,
+        Guid              departmentId,
+        string?           description = null,
+        IEnumerable<string>? tags     = null)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            throw new DomainException("Document title cannot be empty.");
+        if (title.Length > 500)
+            throw new DomainException("Document title cannot exceed 500 characters.");
+
+        var doc = new Document
+        {
+            Title        = title.Trim(),
+            Code         = DocumentCode.Create(code),
+            Standard     = standard,
+            Category     = category,
+            Status       = DocumentStatus.Draft,
+            CurrentVersion = VersionNumber.Initial,
+            OwnerId      = ownerId,
+            DepartmentId = departmentId,
+            Description  = description,
+            Tags         = (tags?.ToList() ?? new List<string>()).AsReadOnly()
+        };
+
+        doc.AddDomainEvent(new DocumentCreatedEvent(doc.Id, doc.Code, ownerId));
+        return doc;
+    }
+
+    // ── State transition methods ─────────────────────────────────────────
+
+    /// <summary>Submit to approval workflow. Draft → UnderReview.</summary>
+    public void SubmitForReview(Guid submittedBy)
+    {
+        EnsureStatus(DocumentStatus.Draft,
+            "Only documents in Draft status can be submitted for review.");
+
+        if (!_versions.Any())
+            throw new DomainException(
+                "Cannot submit a document with no uploaded file. Please upload a file first.");
+
+        Status    = DocumentStatus.UnderReview;
+        UpdatedAt = DateTime.UtcNow;
+        UpdatedBy = submittedBy;
+
+        AddDomainEvent(new DocumentSubmittedForReviewEvent(Id, submittedBy));
+    }
+
+    /// <summary>QA/Safety officer approves → moves to PendingFinalApproval.</summary>
+    public void AdvanceToFinalApproval(Guid approvedBy)
+    {
+        EnsureStatus(DocumentStatus.UnderReview,
+            "Document must be under review to advance to final approval.");
+
+        Status    = DocumentStatus.PendingFinalApproval;
+        UpdatedAt = DateTime.UtcNow;
+        UpdatedBy = approvedBy;
+    }
+
+    /// <summary>ISO Manager final sign-off. PendingFinalApproval → Published.</summary>
+    public void Publish(Guid approvedBy, bool isMajorChange = false)
+    {
+        EnsureStatus(DocumentStatus.PendingFinalApproval,
+            "Document must be pending final approval before it can be published.");
+
+        // Bump version on publish
+        CurrentVersion = isMajorChange
+            ? CurrentVersion.BumpMajor()
+            : CurrentVersion.BumpMinor();
+
+        // Mark current version record
+        var latestVersion = _versions.OrderByDescending(v => v.UploadedAt).FirstOrDefault();
+        latestVersion?.SetAsCurrent();
+
+        Status    = DocumentStatus.Published;
+        UpdatedAt = DateTime.UtcNow;
+        UpdatedBy = approvedBy;
+
+        AddDomainEvent(new DocumentPublishedEvent(Id, Code, CurrentVersion, approvedBy));
+    }
+
+    /// <summary>Reject at any review stage → Rejected (back to owner for revision).</summary>
+    public void Reject(Guid rejectedBy, string reason)
+    {
+        if (Status is not (DocumentStatus.UnderReview or DocumentStatus.PendingFinalApproval))
+            throw new InvalidDocumentWorkflowStateException(
+                Id, Status, DocumentStatus.Rejected,
+                "Documents can only be rejected while under review or pending final approval.");
+
+        if (string.IsNullOrWhiteSpace(reason))
+            throw new DomainException("A rejection reason must be provided.");
+
+        Status    = DocumentStatus.Rejected;
+        UpdatedAt = DateTime.UtcNow;
+        UpdatedBy = rejectedBy;
+
+        AddDomainEvent(new DocumentRejectedEvent(Id, rejectedBy, reason));
+    }
+
+    /// <summary>Return a Rejected document to Draft for revision.</summary>
+    public void ReturnToDraft(Guid revisedBy)
+    {
+        EnsureStatus(DocumentStatus.Rejected,
+            "Only rejected documents can be returned to draft.");
+
+        Status    = DocumentStatus.Draft;
+        UpdatedAt = DateTime.UtcNow;
+        UpdatedBy = revisedBy;
+    }
+
+    /// <summary>Archive a Published document (superseded by newer version).</summary>
+    public void Archive(Guid archivedBy)
+    {
+        EnsureStatus(DocumentStatus.Published,
+            "Only published documents can be archived.");
+
+        Status    = DocumentStatus.Archived;
+        UpdatedAt = DateTime.UtcNow;
+        UpdatedBy = archivedBy;
+
+        AddDomainEvent(new DocumentArchivedEvent(Id, archivedBy));
+    }
+
+    // ── Version management ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Adds a new file version to this document.
+    /// The version is NOT set as current until the document is Published.
+    /// </summary>
+    public DocumentVersion AddVersion(
+        string blobPath,
+        long   fileSize,
+        DocumentFileType fileType,
+        string checksumHex,
+        Guid   uploadedBy,
+        string? changeNote = null)
+    {
+        if (Status == DocumentStatus.Archived)
+            throw new DomainException("Cannot add versions to an archived document.");
+
+        if (Status == DocumentStatus.Published)
+            throw new DomainException(
+                "Cannot add versions to a published document. Return to Draft first via ReturnToDraft().");
+
+        // Deactivate all previous versions
+        foreach (var v in _versions.Where(v => v.IsCurrentVersion))
+            v.ClearCurrentFlag();
+
+        var version = DocumentVersion.Create(
+            documentId:  Id,
+            blobPath:    blobPath,
+            fileSize:    fileSize,
+            fileType:    fileType,
+            checksum:    FileChecksum.FromHexString(checksumHex),
+            uploadedBy:  uploadedBy,
+            changeNote:  changeNote);
+
+        _versions.Add(version);
+        return version;
+    }
+
+    // ── Metadata updates ─────────────────────────────────────────────────
+
+    public void UpdateMetadata(
+        string?             title       = null,
+        string?             description = null,
+        IEnumerable<string>? tags       = null,
+        Guid?               updatedBy   = null)
+    {
+        if (Status == DocumentStatus.Archived)
+            throw new DomainException("Archived documents cannot be modified.");
+
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            if (title.Length > 500) throw new DomainException("Title cannot exceed 500 characters.");
+            Title = title.Trim();
+        }
+
+        if (description is not null) Description = description;
+        if (tags        is not null) Tags = tags.ToList().AsReadOnly();
+
+        UpdatedAt = DateTime.UtcNow;
+        UpdatedBy = updatedBy;
+    }
+
+    // ── Private helpers ──────────────────────────────────────────────────
+
+    private void EnsureStatus(DocumentStatus required, string message)
+    {
+        if (Status != required)
+            throw new InvalidDocumentWorkflowStateException(Id, Status, required, message);
+    }
+}
+
+
+5.2  DocumentVersion
+Immutable sau khi tạo. internal constructor — chỉ Document.AddVersion() có thể tạo. Checksum lưu dạng SHA-256 hex string (64 chars).
+using IsoDoc.Domain.Common;
+using IsoDoc.Domain.Enums;
+using IsoDoc.Domain.ValueObjects;
+
+namespace IsoDoc.Domain.Entities;
+
+/// <summary>
+/// Represents one physical file version of a Document.
+/// Immutable after creation — auditing requires no version be deleted.
+/// Each version stores its own checksum for ISO 27001 integrity verification.
+/// </summary>
+public sealed class DocumentVersion : BaseEntity
+{
+    public Guid             DocumentId        { get; private set; }
+    public string           BlobPath          { get; private set; } = string.Empty;
+    public long             FileSize          { get; private set; }   // bytes
+    public DocumentFileType FileType          { get; private set; }
+    public FileChecksum     Checksum          { get; private set; }   = null!;
+    public string?          ChangeNote        { get; private set; }
+    public Guid             UploadedBy        { get; private set; }
+    public DateTime         UploadedAt        { get; private set; }
+    public bool             IsCurrentVersion  { get; private set; }
+
+    private DocumentVersion() { }
+
+    internal static DocumentVersion Create(
+        Guid             documentId,
+        string           blobPath,
+        long             fileSize,
+        DocumentFileType fileType,
+        FileChecksum     checksum,
+        Guid             uploadedBy,
+        string?          changeNote = null)
+    {
+        if (string.IsNullOrWhiteSpace(blobPath))
+            throw new ArgumentException("Blob path cannot be empty.", nameof(blobPath));
+        if (fileSize <= 0)
+            throw new ArgumentException("File size must be positive.", nameof(fileSize));
+
+        return new DocumentVersion
+        {
+            DocumentId       = documentId,
+            BlobPath         = blobPath,
+            FileSize         = fileSize,
+            FileType         = fileType,
+            Checksum         = checksum,
+            ChangeNote       = changeNote,
+            UploadedBy       = uploadedBy,
+            UploadedAt       = DateTime.UtcNow,
+            IsCurrentVersion = false
+        };
+    }
+
+    /// <summary>Called by Document.Publish() to mark this as the active version.</summary>
+    internal void SetAsCurrent()    => IsCurrentVersion = true;
+
+    /// <summary>Called when a newer version is added.</summary>
+    internal void ClearCurrentFlag() => IsCurrentVersion = false;
+
+    /// <summary>
+    /// Verifies that a downloaded file matches the stored checksum.
+    /// Use in the download endpoint before serving the file.
+    /// </summary>
+    public bool VerifyIntegrity(byte[] fileContent)
+        => Checksum.Verify(fileContent);
+
+    public string FileSizeFormatted => FileSize switch
+    {
+        < 1_024        => $"{FileSize} B",
+        < 1_048_576    => $"{FileSize / 1_024.0:F1} KB",
+        < 1_073_741_824 => $"{FileSize / 1_048_576.0:F1} MB",
+        _              => $"{FileSize / 1_073_741_824.0:F1} GB"
+    };
+}
+
+
+5.3  ApprovalWorkflow + ApprovalStep
+State machine 2-step mặc định. RecordDecision() tự động advance hoặc complete workflow. Mọi decision được persist — không xóa, không sửa.
+using IsoDoc.Domain.Common;
+using IsoDoc.Domain.Enums;
+using IsoDoc.Domain.Events;
+using IsoDoc.Domain.Exceptions;
+
+namespace IsoDoc.Domain.Entities;
+
+/// <summary>
+/// Manages the multi-step approval workflow for a document version.
+///
+/// Workflow model (2-step default, configurable):
+///   Step 1: QA/Safety/ISMS Officer review  → Approved / Rejected
+///   Step 2: ISO Manager final sign-off     → Approved / Rejected
+///
+/// The workflow is immutable once completed. A new workflow is created
+/// for each submission attempt (so we have full history of all attempts).
+/// </summary>
+public sealed class ApprovalWorkflow : BaseEntity
+{
+    private readonly List<ApprovalStep> _steps = new();
+
+    public Guid       DocumentId     { get; private set; }
+    public Guid       VersionId      { get; private set; }
+    public int        CurrentStepOrder { get; private set; }
+    public WorkflowStatus Status     { get; private set; }
+    public DateTime   StartedAt      { get; private set; }
+    public DateTime?  CompletedAt    { get; private set; }
+
+    public IReadOnlyCollection<ApprovalStep> Steps => _steps.AsReadOnly();
+
+    public ApprovalStep? CurrentStep =>
+        _steps.SingleOrDefault(s => s.StepOrder == CurrentStepOrder
+                                 && s.Decision == WorkflowDecision.Pending);
+
+    public bool IsCompleted => Status is WorkflowStatus.Approved or WorkflowStatus.Rejected;
+
+    private ApprovalWorkflow() { }
+
+    /// <summary>
+    /// Creates a new 2-step workflow.
+    /// Step 1 approver = officer (QA/Safety/ISMS based on ISO standard).
+    /// Step 2 approver = ISO Manager.
+    /// </summary>
+    public static ApprovalWorkflow Create(
+        Guid documentId,
+        Guid versionId,
+        Guid step1ApproverId,
+        Guid step2ApproverId)
+    {
+        var workflow = new ApprovalWorkflow
+        {
+            DocumentId       = documentId,
+            VersionId        = versionId,
+            CurrentStepOrder = 1,
+            Status           = WorkflowStatus.InProgress,
+            StartedAt        = DateTime.UtcNow
+        };
+
+        workflow._steps.Add(ApprovalStep.Create(workflow.Id, 1, step1ApproverId));
+        workflow._steps.Add(ApprovalStep.Create(workflow.Id, 2, step2ApproverId));
+
+        return workflow;
+    }
+
+    /// <summary>
+    /// Records a decision for the current step.
+    /// If approved and more steps remain, advances to next step.
+    /// If approved and no more steps, marks workflow as Approved.
+    /// If rejected, immediately marks workflow as Rejected.
+    /// </summary>
+    public void RecordDecision(Guid approverId, WorkflowDecision decision, string? comment = null)
+    {
+        if (IsCompleted)
+            throw new DomainException("Cannot record a decision on a completed workflow.");
+
+        var step = _steps.SingleOrDefault(s => s.StepOrder == CurrentStepOrder);
+        if (step is null)
+            throw new DomainException($"No step found at order {CurrentStepOrder}.");
+
+        if (step.ApproverId != approverId)
+            throw new UnauthorizedWorkflowAccessException(approverId, CurrentStepOrder);
+
+        step.RecordDecision(decision, comment);
+
+        if (decision == WorkflowDecision.Rejected)
+        {
+            Status      = WorkflowStatus.Rejected;
+            CompletedAt = DateTime.UtcNow;
+            AddDomainEvent(new WorkflowRejectedEvent(DocumentId, VersionId, approverId, comment ?? ""));
+        }
+        else
+        {
+            var nextStep = _steps
+                .Where(s => s.StepOrder > CurrentStepOrder)
+                .OrderBy(s => s.StepOrder)
+                .FirstOrDefault();
+
+            if (nextStep is null)
+            {
+                // All steps approved
+                Status           = WorkflowStatus.Approved;
+                CompletedAt      = DateTime.UtcNow;
+                AddDomainEvent(new WorkflowCompletedEvent(DocumentId, VersionId));
+            }
+            else
+            {
+                // Advance to next step
+                CurrentStepOrder = nextStep.StepOrder;
+                AddDomainEvent(new WorkflowStepAdvancedEvent(DocumentId, nextStep.ApproverId, nextStep.StepOrder));
+            }
+        }
+    }
+}
+
+// ── Supporting enums ────────────────────────────────────────────────────────
+
+public enum WorkflowStatus
+{
+    InProgress = 1,
+    Approved   = 2,
+    Rejected   = 3
+}
+
+// ── ApprovalStep child entity ────────────────────────────────────────────────
+
+/// <summary>
+/// One step within an ApprovalWorkflow.
+/// Owned by the workflow — no identity outside it.
+/// </summary>
+public sealed class ApprovalStep : BaseEntity
+{
+    public Guid               WorkflowId  { get; private set; }
+    public int                StepOrder   { get; private set; }
+    public Guid               ApproverId  { get; private set; }
+    public WorkflowDecision   Decision    { get; private set; }
+    public string?            Comment     { get; private set; }
+    public DateTime?          DecidedAt   { get; private set; }
+
+    private ApprovalStep() { }
+
+    internal static ApprovalStep Create(Guid workflowId, int stepOrder, Guid approverId)
+        => new()
+        {
+            WorkflowId  = workflowId,
+            StepOrder   = stepOrder,
+            ApproverId  = approverId,
+            Decision    = WorkflowDecision.Pending
+        };
+
+    internal void RecordDecision(WorkflowDecision decision, string? comment)
+    {
+        if (Decision != WorkflowDecision.Pending)
+            throw new DomainException("Decision has already been recorded for this step.");
+        Decision  = decision;
+        Comment   = comment;
+        DecidedAt = DateTime.UtcNow;
+    }
+}
+
+ 
+6. Domain Events
+Domain events là C# records (immutable). Dispatched AFTER SaveChanges() thành công, không trong transaction. Handler ở Application layer.
+
+Event	Handler action (Application layer)
+DocumentCreatedEvent	Log audit; gửi welcome notification
+DocumentPublishedEvent	Update Elasticsearch index; notify viewers; archive old version
+DocumentRejectedEvent	Notify owner với rejection reason
+DocumentArchivedEvent	Remove from active search index; update audit
+WorkflowStepAdvancedEvent	Email next approver với link phê duyệt
+WorkflowCompletedEvent	Trigger Document.Publish()
+WorkflowRejectedEvent	Trigger Document.Reject(); email owner
+
+using IsoDoc.Domain.Common;
+using IsoDoc.Domain.ValueObjects;
+
+namespace IsoDoc.Domain.Events;
+
+// ── Document lifecycle events ────────────────────────────────────────────────
+
+/// <summary>Raised when a new document is created (status = Draft).</summary>
+public sealed record DocumentCreatedEvent(
+    Guid         DocumentId,
+    DocumentCode DocumentCode,
+    Guid         OwnerId
+) : DomainEventBase;
+
+/// <summary>Raised when a document is submitted to the approval workflow.</summary>
+public sealed record DocumentSubmittedForReviewEvent(
+    Guid DocumentId,
+    Guid SubmittedBy
+) : DomainEventBase;
+
+/// <summary>
+/// Raised when a document is fully approved and published.
+/// Triggers: search index update, notification to all viewers, version archive.
+/// </summary>
+public sealed record DocumentPublishedEvent(
+    Guid          DocumentId,
+    DocumentCode  DocumentCode,
+    VersionNumber Version,
+    Guid          ApprovedBy
+) : DomainEventBase;
+
+/// <summary>
+/// Raised when a document is rejected at any review step.
+/// Triggers: notification to document owner with rejection reason.
+/// </summary>
+public sealed record DocumentRejectedEvent(
+    Guid   DocumentId,
+    Guid   RejectedBy,
+    string Reason
+) : DomainEventBase;
+
+/// <summary>Raised when a published document is archived (superseded).</summary>
+public sealed record DocumentArchivedEvent(
+    Guid DocumentId,
+    Guid ArchivedBy
+) : DomainEventBase;
+
+// ── Workflow events ──────────────────────────────────────────────────────────
+
+/// <summary>Raised when a workflow step is approved and the next approver needs to act.</summary>
+public sealed record WorkflowStepAdvancedEvent(
+    Guid DocumentId,
+    Guid NextApproverId,
+    int  NextStepOrder
+) : DomainEventBase;
+
+/// <summary>Raised when all approval steps are completed successfully.</summary>
+public sealed record WorkflowCompletedEvent(
+    Guid DocumentId,
+    Guid VersionId
+) : DomainEventBase;
+
+/// <summary>Raised when any workflow step is rejected.</summary>
+public sealed record WorkflowRejectedEvent(
+    Guid   DocumentId,
+    Guid   VersionId,
+    Guid   RejectedBy,
+    string Reason
+) : DomainEventBase;
+
+ 
+7. Interfaces (Ports)
+Định nghĩa contracts — Infrastructure tự implement. Domain không biết EF Core, Azure, hay Elasticsearch tồn tại.
+
+using IsoDoc.Domain.Entities;
+using IsoDoc.Domain.Enums;
+
+namespace IsoDoc.Domain.Interfaces;
+
+// ── Repository interfaces (Ports — implemented in Infrastructure) ────────────
+
+/// <summary>
+/// Repository contract for Document aggregate.
+/// Returns domain entities, not DTOs. Paging handled by caller via IQueryable wrapper.
+/// </summary>
+public interface IDocumentRepository
+{
+    Task<Document?>             GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<Document?>             GetByCodeAsync(string code, CancellationToken ct = default);
+    Task<bool>                  ExistsAsync(string code, CancellationToken ct = default);
+    Task<IReadOnlyList<Document>> GetByStatusAsync(DocumentStatus status, CancellationToken ct = default);
+    Task<IReadOnlyList<Document>> GetByOwnerAsync(Guid ownerId, CancellationToken ct = default);
+    Task                        AddAsync(Document document, CancellationToken ct = default);
+    void                        Update(Document document);
+    Task<int>                   SaveChangesAsync(CancellationToken ct = default);
+}
+
+/// <summary>
+/// Repository contract for ApprovalWorkflow aggregate.
+/// </summary>
+public interface IApprovalWorkflowRepository
+{
+    Task<ApprovalWorkflow?> GetByDocumentIdAsync(Guid documentId, CancellationToken ct = default);
+    Task<ApprovalWorkflow?> GetActiveWorkflowAsync(Guid documentId, CancellationToken ct = default);
+    Task<IReadOnlyList<ApprovalWorkflow>> GetPendingForApproverAsync(Guid approverId, CancellationToken ct = default);
+    Task AddAsync(ApprovalWorkflow workflow, CancellationToken ct = default);
+    void Update(ApprovalWorkflow workflow);
+}
+
+// ── Service port interfaces ──────────────────────────────────────────────────
+
+/// <summary>
+/// File storage abstraction. Implemented by AzureBlobStorageService in Infrastructure.
+/// Domain layer only depends on this interface — completely decoupled from Azure SDK.
+/// </summary>
+public interface IFileStorageService
+{
+    /// <summary>Uploads file and returns blob path (storage key).</summary>
+    Task<string> UploadAsync(
+        Stream      fileStream,
+        string      fileName,
+        string      contentType,
+        Guid        documentId,
+        CancellationToken ct = default);
+
+    /// <summary>Returns a time-limited SAS URL for secure download.</summary>
+    Task<string> GetSecureDownloadUrlAsync(
+        string blobPath,
+        TimeSpan expiry,
+        CancellationToken ct = default);
+
+    Task DeleteAsync(string blobPath, CancellationToken ct = default);
+}
+
+/// <summary>
+/// Full-text search service abstraction. Implemented by ElasticsearchService.
+/// </summary>
+public interface ISearchService
+{
+    Task IndexDocumentAsync(Document document, CancellationToken ct = default);
+    Task UpdateDocumentIndexAsync(Document document, CancellationToken ct = default);
+    Task RemoveDocumentAsync(Guid documentId, CancellationToken ct = default);
+    Task<SearchResult> SearchAsync(SearchQuery query, CancellationToken ct = default);
+}
+
+/// <summary>
+/// Audit logging service. Writes to immutable AuditLogs table.
+/// </summary>
+public interface IAuditService
+{
+    Task LogAsync(
+        Guid?  userId,
+        string action,
+        string entityType,
+        string entityId,
+        object? oldValues   = null,
+        object? newValues   = null,
+        string? ipAddress   = null,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Email/notification service for workflow events.
+/// </summary>
+public interface INotificationService
+{
+    Task SendWorkflowNotificationAsync(
+        Guid   recipientUserId,
+        string subject,
+        string message,
+        CancellationToken ct = default);
+}
+
+// ── Search query/result models (domain-owned) ────────────────────────────────
+
+public record SearchQuery(
+    string?       Keyword     = null,
+    IsoStandard?  Standard    = null,
+    DocumentStatus? Status    = null,
+    DocumentCategory? Category = null,
+    Guid?         OwnerId     = null,
+    DateTime?     FromDate    = null,
+    DateTime?     ToDate      = null,
+    int           Page        = 1,
+    int           PageSize    = 20);
+
+public record SearchResult(
+    IReadOnlyList<SearchHit> Hits,
+    int                      TotalCount,
+    int                      Page,
+    int                      PageSize);
+
+public record SearchHit(
+    Guid   DocumentId,
+    string DocumentCode,
+    string Title,
+    string Status,
+    string Standard,
+    double Score,
+    IReadOnlyList<string> Highlights);
+
+ 
+8. Domain Exceptions
+Exceptions có typed properties để middleware có thể map sang HTTP status code chuẩn (400/403/404).
+
+Exception	HTTP code	Khi nào throw
+DomainException (base)	400	Business rule violation
+InvalidDocumentWorkflowStateException	422	Sai state transition
+DocumentNotFoundException	404	Document không tồn tại
+UnauthorizedWorkflowAccessException	403	Không phải approver được assign
+InsufficientPermissionException	403	Thiếu RBAC permission
+
+using IsoDoc.Domain.Enums;
+
+namespace IsoDoc.Domain.Exceptions;
+
+/// <summary>Base class for all domain-layer exceptions.</summary>
+public class DomainException : Exception
+{
+    public DomainException(string message) : base(message) { }
+    public DomainException(string message, Exception inner) : base(message, inner) { }
+}
+
+/// <summary>
+/// Thrown when a state transition on Document is attempted that violates
+/// the workflow state machine rules.
+/// </summary>
+public sealed class InvalidDocumentWorkflowStateException : DomainException
+{
+    public Guid           DocumentId   { get; }
+    public DocumentStatus CurrentStatus { get; }
+    public DocumentStatus AttemptedStatus { get; }
+
+    public InvalidDocumentWorkflowStateException(
+        Guid           documentId,
+        DocumentStatus current,
+        DocumentStatus attempted,
+        string         message)
+        : base($"Document {documentId}: Cannot transition from {current} to {attempted}. {message}")
+    {
+        DocumentId      = documentId;
+        CurrentStatus   = current;
+        AttemptedStatus = attempted;
+    }
+}
+
+/// <summary>Thrown when a Document is not found by ID or Code.</summary>
+public sealed class DocumentNotFoundException : DomainException
+{
+    public DocumentNotFoundException(Guid id)
+        : base($"Document with ID '{id}' was not found.") { }
+
+    public DocumentNotFoundException(string code)
+        : base($"Document with code '{code}' was not found.") { }
+}
+
+/// <summary>
+/// Thrown when a user attempts to approve/reject a step they are not assigned to.
+/// </summary>
+public sealed class UnauthorizedWorkflowAccessException : DomainException
+{
+    public UnauthorizedWorkflowAccessException(Guid userId, int stepOrder)
+        : base($"User '{userId}' is not the assigned approver for step {stepOrder}.") { }
+}
+
+/// <summary>
+/// Thrown when a user attempts an action they don't have RBAC permission for.
+/// </summary>
+public sealed class InsufficientPermissionException : DomainException
+{
+    public InsufficientPermissionException(Guid userId, string requiredPermission)
+        : base($"User '{userId}' does not have the required permission: '{requiredPermission}'.") { }
+}
+
+
+--- Hết Phần 1: Domain Layer. Phần tiếp theo: Application Layer (CQRS + MediatR) ---
