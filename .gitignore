@@ -24,6 +24,9 @@ src/04_WebAPI/IsoDoc.WebAPI/App_Data/
 ## Microsoft Office lock / temporary owner files
 ~$*
 **/~$*
+~$*.docx
+~$*.xlsx
+~$*.pptx
 
 ## Local-only overrides (copy from *.example)
 src/04_WebAPI/IsoDoc.WebAPI/appsettings.Development.json

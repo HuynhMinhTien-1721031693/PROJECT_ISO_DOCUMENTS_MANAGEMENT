@@ -26,7 +26,7 @@ Project chia 4 tầng:
 - `03_Infrastructure`: EF Core, Blob, Elasticsearch, Redis, JWT, DI.
 - `04_WebAPI`: middleware, controller, auth, swagger, health check.
 
-Tài liệu tổng quan chi tiết: `ISO_DMS_V3_Architecture.md`
+Tài liệu tổng quan chi tiết: `docs/architecture/ISO_DMS_V3_Architecture.md`
 
 ## Công nghệ chính
 
