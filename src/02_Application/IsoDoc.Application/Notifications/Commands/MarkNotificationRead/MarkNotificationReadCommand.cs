@@ -37,7 +37,7 @@ public sealed class MarkNotificationReadCommandHandler : IRequestHandler<MarkNot
 
         var n = await _notifications.GetByIdForUserAsync(command.NotificationId, userId.Value, ct);
         if (n is null)
-            return Result.Failure("Khong tim thay thong bao.", "NOT_FOUND");
+            return Result.Failure("Không tìm thấy thông báo.", "NOT_FOUND");
 
         await _notifications.MarkReadAsync(command.NotificationId, userId.Value, ct);
         return Result.Success();

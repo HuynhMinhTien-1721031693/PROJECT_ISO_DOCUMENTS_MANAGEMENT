@@ -49,11 +49,11 @@ public sealed class GetWorkflowByIdQueryHandler : IRequestHandler<GetWorkflowByI
 
         var workflow = await _workflows.GetByIdAsync(query.WorkflowId, ct);
         if (workflow is null)
-            return Result<WorkflowDetailDto>.Failure("Khong tim thay workflow.", "WORKFLOW_NOT_FOUND");
+            return Result<WorkflowDetailDto>.Failure("Không tìm thấy workflow.", "WORKFLOW_NOT_FOUND");
 
         var document = await _documents.GetByIdAsync(workflow.DocumentId, ct);
         if (document is null)
-            return Result<WorkflowDetailDto>.Failure("Khong tim thay tai lieu.", "DOCUMENT_NOT_FOUND");
+            return Result<WorkflowDetailDto>.Failure("Không tìm thấy tài liệu.", "DOCUMENT_NOT_FOUND");
 
         var isAdmin = _currentUser.Roles.Any(r =>
             string.Equals(r, "SystemAdmin", StringComparison.OrdinalIgnoreCase));

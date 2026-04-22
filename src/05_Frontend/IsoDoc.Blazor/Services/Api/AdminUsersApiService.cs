@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using IsoDoc.Blazor.Models;
 
 namespace IsoDoc.Blazor.Services.Api;
@@ -24,4 +25,32 @@ public sealed class AdminUsersApiService
 
     public async Task<(bool Ok, string? Error)> SetRolesAsync(Guid userId, IReadOnlyList<string> roles, CancellationToken ct = default) =>
         await _apiClient.PutWithoutContentAsync($"admin/users/{userId}/roles", new { roles }, ct);
+
+    public async Task<(UserListItemDto? Created, string? Error)> CreateAsync(
+        string email,
+        string password,
+        string? displayName,
+        Guid? departmentId,
+        IReadOnlyList<string> roles,
+        CancellationToken ct = default)
+    {
+        var content = JsonContent.Create(new
+        {
+            email,
+            password,
+            displayName,
+            departmentId,
+            roles
+        });
+        return await _apiClient.PostWrappedAsync<UserListItemDto>("admin/users", content, ct);
+    }
+
+    public Task<(bool Ok, string? Error)> LockAsync(Guid userId, CancellationToken ct = default) =>
+        _apiClient.PostWithoutContentAsync($"admin/users/{userId}/lock", new { }, ct);
+
+    public Task<(bool Ok, string? Error)> UnlockAsync(Guid userId, CancellationToken ct = default) =>
+        _apiClient.PostWithoutContentAsync($"admin/users/{userId}/unlock", new { }, ct);
+
+    public Task<(bool Ok, string? Error)> DeleteAsync(Guid userId, CancellationToken ct = default) =>
+        _apiClient.DeleteAsync($"admin/users/{userId}", ct);
 }

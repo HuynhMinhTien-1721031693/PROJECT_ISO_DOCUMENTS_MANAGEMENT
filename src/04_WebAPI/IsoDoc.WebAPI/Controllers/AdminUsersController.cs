@@ -10,8 +10,13 @@ namespace IsoDoc.WebAPI.Controllers;
 public sealed class AdminUsersController : ApiControllerBase
 {
     private readonly IUserAdministrationService _users;
+    private readonly ICurrentUserService _currentUser;
 
-    public AdminUsersController(IUserAdministrationService users) => _users = users;
+    public AdminUsersController(IUserAdministrationService users, ICurrentUserService currentUser)
+    {
+        _users = users;
+        _currentUser = currentUser;
+    }
 
     [HttpGet]
     [ProducesResponseType(StatusCodes.Status200OK)]
@@ -52,6 +57,34 @@ public sealed class AdminUsersController : ApiControllerBase
     public async Task<IActionResult> SetRoles(Guid id, [FromBody] SetAdminUserRolesRequest body, CancellationToken ct = default)
     {
         var result = await _users.SetRolesAsync(id, body.Roles ?? Array.Empty<string>(), ct);
+        return FromAdminResult(result, () => NoContent());
+    }
+
+    [HttpPost("{id:guid}/lock")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> Lock(Guid id, CancellationToken ct = default)
+    {
+        if (_currentUser.UserId is not { } actorId)
+            return Unauthorized();
+        var result = await _users.LockUserAsync(id, actorId, ct);
+        return FromAdminResult(result, () => NoContent());
+    }
+
+    [HttpPost("{id:guid}/unlock")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> Unlock(Guid id, CancellationToken ct = default)
+    {
+        var result = await _users.UnlockUserAsync(id, ct);
+        return FromAdminResult(result, () => NoContent());
+    }
+
+    [HttpDelete("{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct = default)
+    {
+        if (_currentUser.UserId is not { } actorId)
+            return Unauthorized();
+        var result = await _users.DeleteUserAsync(id, actorId, ct);
         return FromAdminResult(result, () => NoContent());
     }
 

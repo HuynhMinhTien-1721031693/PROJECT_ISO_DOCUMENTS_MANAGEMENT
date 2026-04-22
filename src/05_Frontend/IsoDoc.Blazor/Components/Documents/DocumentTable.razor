@@ -1,5 +1,3 @@
-@inject NavigationManager NavigationManager
-
 <div class="card">
     <table class="doc-table">
         <thead>
@@ -26,15 +24,15 @@
                 @foreach (var doc in Items)
                 {
                     <tr>
-                        <td>@doc.DocumentCode</td>
-                        <td>@doc.Title</td>
+                        <td><a class="iso-doc-code" href="@($"/documents/{doc.Id}")">@doc.DocumentCode</a></td>
+                        <td><a class="btn-link" href="@($"/documents/{doc.Id}")">@doc.Title</a></td>
                         <td>@doc.IsoStandard</td>
                         <td><StatusBadge Status="@doc.Status" /></td>
                         <td>@doc.CurrentVersion</td>
                         <td>@doc.OwnerName</td>
                         <td>@doc.UpdatedAt.ToLocalTime().ToString("dd/MM/yyyy")</td>
                         <td>
-                            <button class="btn-link" @onclick="() => OpenDetail(doc.Id)">Detail</button>
+                            <a class="btn-link" href="@($"/documents/{doc.Id}")">Chi tiết</a>
                         </td>
                     </tr>
                 }
@@ -45,6 +43,4 @@
 
 @code {
     [Parameter] public IReadOnlyList<DocumentSummaryDto> Items { get; set; } = Array.Empty<DocumentSummaryDto>();
-
-    private void OpenDetail(Guid id) => NavigationManager.NavigateTo($"/documents/{id}");
 }

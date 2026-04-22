@@ -1,10 +1,36 @@
 ﻿@inherits LayoutComponentBase
+@implements IDisposable
+@inject NavigationManager NavigationManager
 
-<div class="page">
+<div class="iso-dms-app">
     <AppSidebar />
-    <article class="content">
-        @Body
-    </article>
+    <div class="iso-main">
+        <header class="iso-topbar">
+            <div class="iso-topbar-leading">
+                <h1 class="iso-topbar-title">
+                    @if (!string.IsNullOrEmpty(_pageTitleHref))
+                    {
+                        <a class="iso-topbar-title-link" href="@_pageTitleHref">@_pageTitle</a>
+                    }
+                    else
+                    {
+                        @_pageTitle
+                    }
+                    <span class="iso-accent">·</span>
+                </h1>
+                <p class="iso-topbar-sub">@_pageSubtitle</p>
+            </div>
+            <div class="iso-topbar-actions">
+                <div class="iso-notif-bell-wrap">
+                    <NotificationBell />
+                </div>
+                <a class="iso-btn iso-btn-primary" href="/new-document">＋ Tài liệu mới</a>
+            </div>
+        </header>
+        <main class="iso-content">
+            @Body
+        </main>
+    </div>
 </div>
 
 <div id="blazor-error-ui" data-nosnippet>
@@ -12,3 +38,60 @@
     <a href="." class="reload">Reload</a>
     <span class="dismiss">🗙</span>
 </div>
+
+@code {
+    private string _pageTitle = "ISO DMS";
+    private string _pageSubtitle = string.Empty;
+    private string? _pageTitleHref;
+
+    protected override void OnInitialized()
+    {
+        NavigationManager.LocationChanged += OnLocationChanged;
+        RefreshTitles();
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e) => RefreshTitles();
+
+    private void RefreshTitles()
+    {
+        var path = new Uri(NavigationManager.Uri).AbsolutePath;
+        if (path.Length > 1 && path.EndsWith('/'))
+            path = path.TrimEnd('/');
+
+        if (path.StartsWith("/documents/", StringComparison.Ordinal) && path.Length > "/documents/".Length)
+        {
+            _pageTitle = "Chi tiết tài liệu";
+            _pageSubtitle = "Metadata và phiên bản.";
+            _pageTitleHref = "/documents";
+        }
+        else if (path.StartsWith("/workflow/", StringComparison.Ordinal) && path.Length > "/workflow/".Length)
+        {
+            _pageTitle = "Chi tiết workflow";
+            _pageSubtitle = "Bước duyệt và quyết định.";
+            _pageTitleHref = "/workflow";
+        }
+        else
+        {
+            _pageTitleHref = null;
+            (_pageTitle, _pageSubtitle) = path.ToLowerInvariant() switch
+            {
+                "/" => ("Dashboard", "Tổng quan tài liệu ISO và tiến độ duyệt."),
+                "/documents" => ("Tài liệu", "Danh sách, lọc và tra cứu tài liệu."),
+                "/new-document" => ("Tải lên mới", "Tạo phiên bản tài liệu mới."),
+                "/workflow" => ("Workflow", "Luồng phê duyệt và việc chờ xử lý."),
+                "/audit" => ("Audit log", "Nhật ký thao tác hệ thống."),
+                "/reports" => ("Báo cáo tuân thủ", "Báo cáo và chỉ số tuân thủ."),
+                "/admin/users" => ("Admin — Users", "Quản lý người dùng và vai trò."),
+                "/settings" => ("Settings", "Cấu hình kết nối API."),
+                _ => ("ISO DMS", "Hệ thống quản lý tài liệu ISO.")
+            };
+        }
+
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        NavigationManager.LocationChanged -= OnLocationChanged;
+    }
+}

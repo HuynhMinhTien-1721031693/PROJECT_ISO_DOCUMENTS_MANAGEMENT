@@ -45,4 +45,10 @@ public interface IUserAdministrationService
     Task<Result> UpdateUserAsync(Guid id, string? displayName, Guid? departmentId, bool? lockoutEnabled, CancellationToken ct);
 
     Task<Result> SetRolesAsync(Guid id, IReadOnlyList<string> roles, CancellationToken ct);
+
+    Task<Result> LockUserAsync(Guid id, Guid currentUserId, CancellationToken ct);
+
+    Task<Result> UnlockUserAsync(Guid id, CancellationToken ct);
+
+    Task<Result> DeleteUserAsync(Guid id, Guid currentUserId, CancellationToken ct);
 }

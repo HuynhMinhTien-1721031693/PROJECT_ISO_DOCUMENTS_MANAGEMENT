@@ -2,84 +2,157 @@
 @attribute [Authorize]
 @inject DocumentApiService DocumentApiService
 @inject WorkflowApiService WorkflowApiService
-@inject NavigationManager NavigationManager
 
-<h1>Dashboard</h1>
-<p class="muted">Tổng quan tài liệu ISO và tiến độ duyệt.</p>
-
-@if (!string.IsNullOrWhiteSpace(Error))
+@if (!string.IsNullOrWhiteSpace(Error) && !_errorDismissed)
 {
-    <p class="error-banner" style="margin: 12px 0;">@Error</p>
+    <div class="iso-dash-alert" role="alert">
+        <span class="iso-dash-alert-msg">@Error</span>
+        <button type="button" class="iso-dash-alert-close" aria-label="Đóng" @onclick="() => _errorDismissed = true">✕</button>
+    </div>
 }
 
-<div class="kpi-grid">
-    <article class="card kpi-card">
-        <h3>Total Documents</h3>
-        <strong>@TotalDocuments</strong>
+<div class="iso-section-header">
+    <span class="iso-section-title">Tổng quan hôm nay</span>
+    <button type="button" class="iso-btn iso-btn-ghost" style="font-size:12px;padding:6px 12px" disabled="@Busy" @onclick="ReloadAsync">↻ Làm mới</button>
+</div>
+
+<div class="iso-kpi-grid">
+    <article class="iso-kpi-card c-blue">
+        <div class="iso-kpi-header">
+            <span class="iso-kpi-label">Total Documents</span>
+            <div class="iso-kpi-icon">📄</div>
+        </div>
+        <div class="iso-kpi-value">@TotalDocuments</div>
+        <div class="iso-kpi-trend @(TotalDocuments > 0 ? "up" : "")">@(TotalDocuments > 0 ? "↑ Dữ liệu từ API" : "— Chưa có tài liệu")</div>
+        <div class="iso-kpi-bar"><div class="iso-kpi-bar-fill" style="width:@(KpiPct(TotalDocuments))%"></div></div>
     </article>
-    <article class="card kpi-card">
-        <h3>Draft</h3>
-        <strong>@DraftCount</strong>
+    <article class="iso-kpi-card c-teal">
+        <div class="iso-kpi-header">
+            <span class="iso-kpi-label">Draft</span>
+            <div class="iso-kpi-icon">✏️</div>
+        </div>
+        <div class="iso-kpi-value">@DraftCount</div>
+        <div class="iso-kpi-trend">@(DraftCount > 0 ? "↑ Bản nháp" : "— Bản nháp đang soạn")</div>
+        <div class="iso-kpi-bar"><div class="iso-kpi-bar-fill" style="width:@(KpiPct(DraftCount))%"></div></div>
     </article>
-    <article class="card kpi-card">
-        <h3>Under Review</h3>
-        <strong>@ReviewCount</strong>
+    <article class="iso-kpi-card c-gold">
+        <div class="iso-kpi-header">
+            <span class="iso-kpi-label">Under Review</span>
+            <div class="iso-kpi-icon">🔍</div>
+        </div>
+        <div class="iso-kpi-value">@ReviewCount</div>
+        <div class="iso-kpi-trend">@(ReviewCount > 0 ? "↑ Đang xét duyệt" : "— Đang xét duyệt")</div>
+        <div class="iso-kpi-bar"><div class="iso-kpi-bar-fill" style="width:@(KpiPct(ReviewCount))%"></div></div>
     </article>
-    <article class="card kpi-card">
-        <h3>Pending Approvals</h3>
-        <strong>@PendingApprovals</strong>
+    <article class="iso-kpi-card c-green">
+        <div class="iso-kpi-header">
+            <span class="iso-kpi-label">Pending Approvals</span>
+            <div class="iso-kpi-icon">✅</div>
+        </div>
+        <div class="iso-kpi-value">@PendingApprovals</div>
+        <div class="iso-kpi-trend @(PendingApprovals > 0 ? "warn" : "")">@(PendingApprovals > 0 ? "! Chờ xử lý" : "— Chờ phê duyệt")</div>
+        <div class="iso-kpi-bar"><div class="iso-kpi-bar-fill" style="width:@(KpiPct(PendingApprovals))%"></div></div>
     </article>
 </div>
 
-<div class="dashboard-grid">
-    <section class="card">
-        <h2 style="margin-bottom: 12px;">Recent Documents</h2>
-        <ul class="simple-list">
-            @if (RecentDocuments.Count == 0)
+<div class="iso-section-header">
+    <span class="iso-section-title">Hoạt động</span>
+</div>
+<div class="iso-bottom-grid">
+    <div class="iso-panel">
+        <div class="iso-panel-head">
+            <span class="iso-panel-title">Recent Documents</span>
+            <a class="iso-panel-action" href="/documents">Xem tất cả →</a>
+        </div>
+        @if (RecentDocuments.Count == 0)
+        {
+            <div class="iso-empty">
+                <div class="iso-empty-icon">📭</div>
+                <div class="iso-empty-title">Chưa có dữ liệu</div>
+                <div class="iso-empty-desc">Tạo tài liệu ISO đầu tiên để bắt đầu theo dõi tiến độ duyệt.</div>
+                <a class="iso-btn iso-btn-primary" style="margin-top:8px" href="/new-document">＋ Tạo tài liệu</a>
+            </div>
+        }
+        else
+        {
+            <table class="iso-doc-table">
+                <thead>
+                    <tr>
+                        <th>Mã tài liệu</th>
+                        <th>Tiêu đề</th>
+                        <th>Tiêu chuẩn</th>
+                        <th>Trạng thái</th>
+                        <th>Cập nhật</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in RecentDocuments)
+                    {
+                        <tr>
+                            <td><span class="iso-doc-code">@item.DocumentCode</span></td>
+                            <td>
+                                <a class="iso-doc-link iso-doc-title-cell" href="@($"/documents/{item.Id}")">@item.Title</a>
+                            </td>
+                            <td>
+                                @if (string.IsNullOrWhiteSpace(item.IsoStandard))
+                                {
+                                    <span class="iso-muted">—</span>
+                                }
+                                else
+                                {
+                                    <span class="iso-tag">@FormatIsoLabel(item.IsoStandard)</span>
+                                }
+                            </td>
+                            <td><StatusBadge Status="@item.Status" /></td>
+                            <td style="color:var(--iso-muted);font-size:12px">@Humanize(item.UpdatedAt)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+
+    <div class="iso-panel">
+        <div class="iso-panel-head">
+            <span class="iso-panel-title">Pending Workflow</span>
+            <a class="iso-panel-action" href="/workflow">Xem hàng đợi →</a>
+        </div>
+        @if (PendingItems.Count == 0)
+        {
+            <div class="iso-empty">
+                <div class="iso-empty-icon">⏳</div>
+                <div class="iso-empty-title">Không có task chờ duyệt</div>
+                <div class="iso-empty-desc">Khi có tài liệu gửi phê duyệt, chúng sẽ hiển thị ở đây.</div>
+            </div>
+        }
+        else
+        {
+            @foreach (var item in PendingItems)
             {
-                <li>Chưa có dữ liệu.</li>
-            }
-            else
-            {
-                @foreach (var item in RecentDocuments)
-                {
-                    <li>
-                        <div>
-                            <button class="btn-link" @onclick="() => OpenDocument(item.Id)">@item.Title</button>
-                            <div class="tiny">@item.DocumentCode • @item.OwnerName</div>
+                <a class="iso-wf-item" href="@($"/workflow/{item.WorkflowId}")">
+                    <div class="iso-wf-icon pending">⏳</div>
+                    <div class="iso-wf-body">
+                        <div class="iso-wf-title">@item.DocumentCode — @item.DocumentTitle</div>
+                        <div class="iso-wf-meta">
+                            Bước @item.StepOrder/@item.TotalSteps
+                            @if (!string.IsNullOrWhiteSpace(item.IsoStandard))
+                            {
+                                <text> · </text>
+                                <span class="iso-tag">@FormatIsoLabel(item.IsoStandard)</span>
+                            }
+                            <text> · @item.DaysWaiting ngày</text>
                         </div>
-                        <StatusBadge Status="@item.Status" />
-                    </li>
-                }
+                    </div>
+                </a>
             }
-        </ul>
-    </section>
-    <section class="card">
-        <h2 style="margin-bottom: 12px;">Pending Workflow</h2>
-        <ul class="simple-list">
-            @if (PendingItems.Count == 0)
-            {
-                <li>Không có task chờ duyệt.</li>
-            }
-            else
-            {
-                @foreach (var item in PendingItems)
-                {
-                    <li>
-                        <div>
-                            <b>@item.DocumentTitle</b>
-                            <div class="tiny">@item.DocumentCode • Step @item.StepOrder/@item.TotalSteps</div>
-                        </div>
-                        <span class="tiny">@item.DaysWaiting ngày</span>
-                    </li>
-                }
-            }
-        </ul>
-    </section>
+        }
+    </div>
 </div>
 
 @code {
     private string Error { get; set; } = string.Empty;
+    private bool _errorDismissed;
+    private bool Busy { get; set; }
     private IReadOnlyList<DocumentSummaryDto> RecentDocuments { get; set; } = Array.Empty<DocumentSummaryDto>();
     private IReadOnlyList<PendingApprovalDto> PendingItems { get; set; } = Array.Empty<PendingApprovalDto>();
 
@@ -88,39 +161,75 @@
     private int ReviewCount { get; set; }
     private int PendingApprovals { get; set; }
 
-    protected override async Task OnInitializedAsync()
+    private int MaxKpi => Math.Max(1, Math.Max(TotalDocuments, Math.Max(DraftCount, Math.Max(ReviewCount, PendingApprovals))));
+
+    private int KpiPct(int value) => Math.Min(100, (int)Math.Round(100.0 * value / MaxKpi));
+
+    protected override Task OnInitializedAsync() => ReloadAsync();
+
+    private async Task ReloadAsync()
     {
-        var recentParams = new SearchDocumentsParams { Page = 1, PageSize = 12, SortBy = "UpdatedAt", SortDesc = true };
-        var draftParams = new SearchDocumentsParams { Status = "Draft", Page = 1, PageSize = 1 };
-        var underParams = new SearchDocumentsParams { Status = "UnderReview", Page = 1, PageSize = 1 };
-        var pendingFinalParams = new SearchDocumentsParams { Status = "PendingFinalApproval", Page = 1, PageSize = 1 };
+        Busy = true;
+        Error = string.Empty;
+        _errorDismissed = false;
+        try
+        {
+            var recentParams = new SearchDocumentsParams { Page = 1, PageSize = 12, SortBy = "UpdatedAt", SortDesc = true };
+            var draftParams = new SearchDocumentsParams { Status = "Draft", Page = 1, PageSize = 1 };
+            var underParams = new SearchDocumentsParams { Status = "UnderReview", Page = 1, PageSize = 1 };
+            var pendingFinalParams = new SearchDocumentsParams { Status = "PendingFinalApproval", Page = 1, PageSize = 1 };
 
-        var recentTask = DocumentApiService.SearchAsync(recentParams);
-        var totalTask = DocumentApiService.SearchAsync(new SearchDocumentsParams { Page = 1, PageSize = 1 });
-        var draftTask = DocumentApiService.SearchAsync(draftParams);
-        var underTask = DocumentApiService.SearchAsync(underParams);
-        var pendingFinalTask = DocumentApiService.SearchAsync(pendingFinalParams);
-        var pendingWorkflowTask = WorkflowApiService.GetPendingAsync(page: 1, pageSize: 20);
+            var recentTask = DocumentApiService.SearchAsync(recentParams);
+            var totalTask = DocumentApiService.SearchAsync(new SearchDocumentsParams { Page = 1, PageSize = 1 });
+            var draftTask = DocumentApiService.SearchAsync(draftParams);
+            var underTask = DocumentApiService.SearchAsync(underParams);
+            var pendingFinalTask = DocumentApiService.SearchAsync(pendingFinalParams);
+            var pendingWorkflowTask = WorkflowApiService.GetPendingAsync(page: 1, pageSize: 20);
 
-        await Task.WhenAll(recentTask, totalTask, draftTask, underTask, pendingFinalTask, pendingWorkflowTask);
+            await Task.WhenAll(recentTask, totalTask, draftTask, underTask, pendingFinalTask, pendingWorkflowTask);
 
-        var (docs, _, docError) = await recentTask;
-        var (_, totalPagination, totalErr) = await totalTask;
-        var (_, draftPag, _) = await draftTask;
-        var (_, underPag, _) = await underTask;
-        var (_, pendingFinalPag, _) = await pendingFinalTask;
-        var (pending, pendingPag, pendingError) = await pendingWorkflowTask;
+            var (docs, _, docError) = await recentTask;
+            var (_, totalPagination, totalErr) = await totalTask;
+            var (_, draftPag, _) = await draftTask;
+            var (_, underPag, _) = await underTask;
+            var (_, pendingFinalPag, _) = await pendingFinalTask;
+            var (pending, pendingPag, pendingError) = await pendingWorkflowTask;
 
-        RecentDocuments = docs.OrderByDescending(x => x.UpdatedAt).Take(6).ToArray();
-        PendingItems = pending.Take(6).ToArray();
-        TotalDocuments = totalPagination?.TotalCount ?? docs.Count;
-        DraftCount = draftPag?.TotalCount ?? 0;
-        ReviewCount = (underPag?.TotalCount ?? 0) + (pendingFinalPag?.TotalCount ?? 0);
-        PendingApprovals = pendingPag?.TotalCount ?? pending.Count;
+            RecentDocuments = docs.OrderByDescending(x => x.UpdatedAt).Take(8).ToArray();
+            PendingItems = pending.Take(8).ToArray();
+            TotalDocuments = totalPagination?.TotalCount ?? docs.Count;
+            DraftCount = draftPag?.TotalCount ?? 0;
+            ReviewCount = (underPag?.TotalCount ?? 0) + (pendingFinalPag?.TotalCount ?? 0);
+            PendingApprovals = pendingPag?.TotalCount ?? pending.Count;
 
-        var err = docError ?? totalErr ?? pendingError;
-        Error = string.IsNullOrWhiteSpace(err) ? string.Empty : ApiProblemMessageFormatter.Format(err);
+            var err = docError ?? totalErr ?? pendingError;
+            Error = string.IsNullOrWhiteSpace(err) ? string.Empty : ApiProblemMessageFormatter.Format(err);
+        }
+        finally
+        {
+            Busy = false;
+        }
     }
 
-    private void OpenDocument(Guid id) => NavigationManager.NavigateTo($"/documents/{id}");
+    private static string FormatIsoLabel(string iso)
+    {
+        var t = iso.Trim();
+        return t.StartsWith("ISO", StringComparison.OrdinalIgnoreCase) ? t : $"ISO {t}";
+    }
+
+    private static string Humanize(DateTime utc)
+    {
+        var dt = utc.Kind == DateTimeKind.Utc ? utc : utc.ToUniversalTime();
+        var diff = DateTime.UtcNow - dt;
+        if (diff.TotalMinutes < 1)
+            return "Vừa xong";
+        if (diff.TotalMinutes < 60)
+            return $"{(int)diff.TotalMinutes} phút trước";
+        if (diff.TotalHours < 24)
+            return $"{(int)diff.TotalHours} giờ trước";
+        if (diff.TotalDays < 7)
+            return $"{(int)diff.TotalDays} ngày trước";
+        return dt.ToLocalTime().ToString("dd/MM/yyyy");
+    }
+
 }

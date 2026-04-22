@@ -115,9 +115,10 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
             .Include("_steps")
             .AsSplitQuery()
             .Where(w => w.Status == WorkflowStatus.InProgress
-                     && w.Steps.Any(s => s.ApproverId == approverId
-                                      && s.Decision == WorkflowDecision.Pending
-                                      && s.StepOrder == w.CurrentStepOrder))
+                     && _db.ApprovalSteps.Any(s => s.WorkflowId == w.Id
+                                               && s.ApproverId == approverId
+                                               && s.Decision == WorkflowDecision.Pending
+                                               && s.StepOrder == w.CurrentStepOrder))
             .OrderBy(w => w.StartedAt)
             .ToListAsync(ct);
 

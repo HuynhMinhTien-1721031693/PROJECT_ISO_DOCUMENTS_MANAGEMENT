@@ -27,7 +27,13 @@ public sealed class AuthService
 
         var response = await _httpClient.PostAsJsonAsync("Auth/login", request, ct);
         if (!response.IsSuccessStatusCode)
-            return (false, $"Login failed ({(int)response.StatusCode}).");
+        {
+            if ((int)response.StatusCode == 423)
+                return (false, "Tai khoan tam thoi bi khoa do nhap sai nhieu lan. Thu lai sau 15 phut hoac reset DB (docker compose down -v).");
+            if ((int)response.StatusCode == 401)
+                return (false, "Sai email hoac mat khau, hoac API chua seed tai khoan demo (can chay Docker / Development voi seed).");
+            return (false, $"Dang nhap that bai ({(int)response.StatusCode}). Kiem tra API dang chay va dia chi Api:BaseUrl.");
+        }
 
         var wrapped = await response.Content.ReadFromJsonAsync<ApiResponse<LoginResponse>>(cancellationToken: ct);
         if (wrapped?.Data is null)

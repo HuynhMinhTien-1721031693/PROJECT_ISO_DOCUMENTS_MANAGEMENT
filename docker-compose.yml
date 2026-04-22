@@ -70,6 +70,10 @@ services:
       - "5062:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Docker
+    volumes:
+      # Blazor Server + ProtectedLocalStorage dùng Data Protection; không mount thì mỗi lần recreate container
+      # là vòng khóa mới → cookie antiforgery/token cũ trên trình duyệt không giải mã được → lỗi đăng nhập/phiên.
+      - isodoc-blazor-keys:/root/.aspnet/DataProtection-Keys
     restart: unless-stopped
 
 volumes:
@@ -77,3 +81,4 @@ volumes:
   isodoc-es-data:
   isodoc-redis-data:
   isodoc-blobs:
+  isodoc-blazor-keys:

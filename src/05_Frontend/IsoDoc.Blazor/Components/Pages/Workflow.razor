@@ -38,7 +38,11 @@
                 @foreach (var item in Items)
                 {
                     <tr>
-                        <td>@item.DocumentCode - @item.DocumentTitle</td>
+                        <td>
+                            <a class="btn-link" href="@($"/documents/{item.DocumentId}")">@item.DocumentCode</a>
+                            <span class="muted"> — </span>
+                            <a class="btn-link" href="@($"/documents/{item.DocumentId}")">@item.DocumentTitle</a>
+                        </td>
                         <td>@item.IsoStandard</td>
                         <td>@item.SubmittedByName</td>
                         <td>@item.StepOrder/@item.TotalSteps</td>

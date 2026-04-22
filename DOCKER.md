@@ -49,6 +49,14 @@ docker compose up
 
 Được seed qua `appsettings.Docker.json` + `IdentityDataSeeder` khi `ASPNETCORE_ENVIRONMENT=Docker`.
 
+**Lưu ý mật khẩu:** `Admin@123` có đúng **9 ký tự** (gồm số **3** cuối). Nếu chỉ gõ `Admin@12` (8 ký tự), API trả **401** và đăng nhập sẽ thất bại.
+
+## Không đăng nhập được / lỗi antiforgery (Blazor)
+
+- **Sai mật khẩu hoặc thiếu ký tự:** kiểm tra đủ `Admin@123`, email `admin@local`. Có thể thử nhanh bằng Swagger: `POST /api/v1/Auth/login` với body JSON `{"email":"admin@local","password":"Admin@123"}`.
+- **Khóa tài khoản (423):** nhập sai nhiều lần → đợi ~15 phút hoặc `docker compose down -v` rồi `docker compose up --build` để reset DB demo.
+- **Sau khi `docker compose up --build` mà trình duyệt vẫn dùng cookie cũ:** có thể gặp log *“The antiforgery token could not be decrypted / key was not found in the key ring”* — xóa dữ liệu trang web cho `http://localhost:5062` (hoặc mở cửa sổ ẩn danh) rồi thử lại. Compose đã gắn volume **`isodoc-blazor-keys`** để khóa Data Protection của Blazor **ổn định** khi recreate container (tránh lỗi giải mã sau mỗi lần build lại image).
+
 ## Cấu hình
 
 - Biến môi trường: file **`.env`** (mẫu `.env.example`).  

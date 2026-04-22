@@ -154,6 +154,57 @@ public sealed class UserAdministrationService : IUserAdministrationService
         return Result.Success();
     }
 
+    public async Task<Result> LockUserAsync(Guid id, Guid currentUserId, CancellationToken ct)
+    {
+        if (id == currentUserId)
+            return Result.Failure("Không thể khóa chính tài khoản đang đăng nhập.", "SELF_ACTION_FORBIDDEN");
+
+        var user = await _userManager.FindByIdAsync(id.ToString());
+        if (user is null)
+            return Result.Failure("Không tìm thấy người dùng.", "USER_NOT_FOUND");
+
+        await _userManager.SetLockoutEnabledAsync(user, true);
+        var until = DateTimeOffset.UtcNow.AddYears(100);
+        var setEnd = await _userManager.SetLockoutEndDateAsync(user, until);
+        return setEnd.Succeeded
+            ? Result.Success()
+            : Result.Failure(string.Join("; ", setEnd.Errors.Select(e => e.Description)), "IDENTITY_ERROR");
+    }
+
+    public async Task<Result> UnlockUserAsync(Guid id, CancellationToken ct)
+    {
+        var user = await _userManager.FindByIdAsync(id.ToString());
+        if (user is null)
+            return Result.Failure("Không tìm thấy người dùng.", "USER_NOT_FOUND");
+
+        await _userManager.SetLockoutEndDateAsync(user, null);
+        await _userManager.ResetAccessFailedCountAsync(user);
+
+        return Result.Success();
+    }
+
+    public async Task<Result> DeleteUserAsync(Guid id, Guid currentUserId, CancellationToken ct)
+    {
+        if (id == currentUserId)
+            return Result.Failure("Không thể xóa chính tài khoản đang đăng nhập.", "SELF_ACTION_FORBIDDEN");
+
+        var user = await _userManager.FindByIdAsync(id.ToString());
+        if (user is null)
+            return Result.Failure("Không tìm thấy người dùng.", "USER_NOT_FOUND");
+
+        if (await _userManager.IsInRoleAsync(user, IsoDocRoles.SystemAdmin))
+        {
+            var admins = await _userManager.GetUsersInRoleAsync(IsoDocRoles.SystemAdmin);
+            if (admins.Count <= 1)
+                return Result.Failure("Không thể xóa quản trị viên hệ thống cuối cùng.", "LAST_SYSTEM_ADMIN");
+        }
+
+        var del = await _userManager.DeleteAsync(user);
+        return del.Succeeded
+            ? Result.Success()
+            : Result.Failure(string.Join("; ", del.Errors.Select(e => e.Description)), "IDENTITY_ERROR");
+    }
+
     private static Result ValidateRoles(IReadOnlyList<string> roles)
     {
         foreach (var r in roles)

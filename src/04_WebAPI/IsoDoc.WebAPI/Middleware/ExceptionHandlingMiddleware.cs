@@ -105,51 +105,51 @@ public sealed class ExceptionHandlingMiddleware
         {
             ValidationException ve => (
                 StatusCodes.Status400BadRequest,
-                "Du lieu khong hop le",
-                "Mot hoac nhieu truong du lieu khong dung dinh dang.",
+                "Dữ liệu không hợp lệ",
+                "Một hoặc nhiều trường dữ liệu không đúng định dạng.",
                 ve.Errors.GroupBy(e => e.PropertyName)
                     .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray())),
 
             DocumentNotFoundException => (
                 StatusCodes.Status404NotFound,
-                "Khong tim thay tai lieu",
+                "Không tìm thấy tài liệu",
                 ex.Message,
                 (Dictionary<string, string[]>?)null),
 
             InvalidDocumentWorkflowStateException => (
                 StatusCodes.Status422UnprocessableEntity,
-                "Trang thai tai lieu khong hop le",
+                "Trạng thái tài liệu không hợp lệ",
                 ex.Message,
                 (Dictionary<string, string[]>?)null),
 
             ImmutableAuditTrailException => (
                 StatusCodes.Status403Forbidden,
-                "Vi pham tinh bat bien nhat ky kiem tra",
+                "Vi phạm tính bất biến nhật ký kiểm tra",
                 ex.Message,
                 (Dictionary<string, string[]>?)null),
 
             DomainException => (
                 StatusCodes.Status422UnprocessableEntity,
-                "Vi pham quy tac nghiep vu",
+                "Vi phạm quy tắc nghiệp vụ",
                 ex.Message,
                 (Dictionary<string, string[]>?)null),
 
             UnauthorizedAccessException => (
                 StatusCodes.Status401Unauthorized,
-                "Chua xac thuc",
-                "Ban can dang nhap de thuc hien thao tac nay.",
+                "Chưa xác thực",
+                "Bạn cần đăng nhập để thực hiện thao tác này.",
                 (Dictionary<string, string[]>?)null),
 
-            ForbiddenAccessException fax => (
+            ForbiddenAccessException fex => (
                 StatusCodes.Status403Forbidden,
-                "Khong co quyen truy cap",
-                $"Ban khong co quyen '{fax.Permission}'.",
+                "Không có quyền truy cập",
+                $"Bạn không có quyền '{fex.Permission}'.",
                 (Dictionary<string, string[]>?)null),
 
             _ => (
                 StatusCodes.Status500InternalServerError,
-                "Loi he thong",
-                _env.IsDevelopment() ? ex.ToString() : "Da xay ra loi khong mong muon. Vui long thu lai.",
+                "Lỗi hệ thống",
+                BuildInternalErrorDetail(ctx, ex),
                 (Dictionary<string, string[]>?)null)
         };
 
@@ -188,6 +188,20 @@ public sealed class ExceptionHandlingMiddleware
                 title
             });
         #endregion
+    }
+
+    /// <summary>
+    /// Demo/Docker: trả về thông điệp lỗi gốc để dễ xử lý. Production: chỉ thông báo an toàn + TraceId.
+    /// </summary>
+    private string BuildInternalErrorDetail(HttpContext ctx, Exception ex)
+    {
+        if (_env.IsDevelopment()
+            || string.Equals(_env.EnvironmentName, "Docker", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
+        }
+
+        return $"Đã xảy ra lỗi không mong muốn. Mã tham chiếu: {ctx.TraceIdentifier}. Vui lòng thử lại sau hoặc gửi mã này cho quản trị viên.";
     }
 
     private static void WriteDebugLog(string hypothesisId, string location, string message, object data)

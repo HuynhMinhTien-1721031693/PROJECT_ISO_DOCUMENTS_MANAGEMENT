@@ -1,14 +1,56 @@
 @page "/admin/users"
 @attribute [Authorize(Roles = "SystemAdmin")]
+@using System.Security.Claims
 @inject AdminUsersApiService AdminUsersApi
+@inject AuthenticationStateProvider AuthState
+@inject IJSRuntime JS
 
 <h1>Quản lý người dùng</h1>
-<p class="muted">UserManagement — danh sách tài khoản và gán vai trò (RoleAssignment).</p>
+<p class="muted">Tài khoản đăng nhập <strong>admin@local</strong> (SystemAdmin) có thể tạo, khóa, mở khóa, xóa người dùng và gán vai trò.</p>
 
 @if (!string.IsNullOrWhiteSpace(Banner))
 {
     <p class="error-banner">@Banner</p>
 }
+
+<section class="card" style="margin-top: 16px;">
+    <h2 style="margin-top:0;">Tạo tài khoản</h2>
+    <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end;">
+        <div class="field" style="min-width:220px; flex:1;">
+            <label>Email</label>
+            <input @bind="NewEmail" @bind:event="oninput" autocomplete="off" />
+        </div>
+        <div class="field" style="min-width:180px; flex:1;">
+            <label>Mật khẩu</label>
+            <input type="password" @bind="NewPassword" @bind:event="oninput" autocomplete="new-password" />
+        </div>
+        <div class="field" style="min-width:160px; flex:1;">
+            <label>Tên hiển thị</label>
+            <input @bind="NewDisplayName" @bind:event="oninput" />
+        </div>
+        <div class="field" style="min-width:200px; flex:1;">
+            <label>Phòng ban (Guid, tùy chọn)</label>
+            <input @bind="NewDepartmentIdText" @bind:event="oninput" placeholder="00000000-0000-0000-0000-000000000000" />
+        </div>
+    </div>
+    <p class="tiny" style="margin:8px 0 0;">Mật khẩu: tối thiểu 8 ký tự, có hoa, thường, số và ký tự đặc biệt.</p>
+    <div class="role-grid" style="margin-top:12px;">
+        @foreach (var role in AllRoles)
+        {
+            <label class="role-check">
+                <input type="checkbox" checked="@NewUserRoles.Contains(role)" @onchange="e => ToggleNewUserRole(role, e.Value is true)" />
+                @role
+            </label>
+        }
+    </div>
+    <div style="margin-top:12px;">
+        <button class="btn" disabled="@CreateBusy" @onclick="CreateUserAsync">@(CreateBusy ? "Đang tạo…" : "Tạo tài khoản")</button>
+    </div>
+    @if (!string.IsNullOrWhiteSpace(CreateError))
+    {
+        <p class="error-banner" style="margin-top:8px;">@CreateError</p>
+    }
+</section>
 
 <section class="card" style="margin-top: 16px;">
     <div style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-bottom:16px;">
@@ -35,22 +77,28 @@
                     <th>Email</th>
                     <th>Tên hiển thị</th>
                     <th>Phòng ban</th>
-                    <th>Khóa</th>
+                    <th>Trạng thái khóa</th>
                     <th>Vai trò</th>
-                    <th></th>
+                    <th>Thao tác</th>
                 </tr>
             </thead>
             <tbody>
                 @foreach (var u in Users)
                 {
+                    var isSelf = CurrentUserId is { } cid && cid == u.Id;
                     <tr>
                         <td>@u.Email</td>
                         <td>@(u.DisplayName ?? "—")</td>
                         <td>@(u.DepartmentId?.ToString() ?? "—")</td>
-                        <td>@(u.LockedOut ? "Có" : (u.LockoutEnabled ? "Cho phép" : "Tắt"))</td>
+                        <td>@(u.LockedOut ? "Đang khóa" : "Hoạt động")</td>
                         <td><span class="tiny">@string.Join(", ", u.Roles)</span></td>
                         <td>
-                            <button class="btn-outline" @onclick="() => StartEditRoles(u)">Gán role</button>
+                            <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                                <button class="btn-outline" @onclick="() => StartEditRoles(u)">Gán role</button>
+                                <button class="btn-outline" disabled="@(u.LockedOut || isSelf)" title="@(isSelf ? "Không thể khóa chính mình" : null)" @onclick="() => LockAsync(u)">Khóa</button>
+                                <button class="btn-outline" disabled="@(!u.LockedOut)" @onclick="() => UnlockAsync(u)">Mở khóa</button>
+                                <button class="btn danger" disabled="@isSelf" title="@(isSelf ? "Không thể xóa chính mình" : null)" @onclick="() => DeleteAsync(u)">Xóa</button>
+                            </div>
                         </td>
                     </tr>
                 }
@@ -104,14 +152,31 @@
     private string Search { get; set; } = string.Empty;
     private bool Busy { get; set; } = true;
     private bool RoleSaveBusy { get; set; }
+    private bool CreateBusy { get; set; }
     private string RoleError { get; set; } = string.Empty;
+    private string CreateError { get; set; } = string.Empty;
     private int Page { get; set; } = 1;
     private PaginationMeta? Pagination { get; set; }
     private List<UserListItemDto> Users { get; } = new();
     private UserListItemDto? EditingUser { get; set; }
     private HashSet<string> SelectedRoles { get; } = new(StringComparer.OrdinalIgnoreCase);
+    private Guid? CurrentUserId { get; set; }
 
-    protected override async Task OnInitializedAsync() => await ReloadAsync();
+    private string NewEmail { get; set; } = string.Empty;
+    private string NewPassword { get; set; } = string.Empty;
+    private string NewDisplayName { get; set; } = string.Empty;
+    private string NewDepartmentIdText { get; set; } = string.Empty;
+    private HashSet<string> NewUserRoles { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        var id = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (Guid.TryParse(id, out var g))
+            CurrentUserId = g;
+
+        await ReloadAsync();
+    }
 
     private async Task ReloadAsync()
     {
@@ -145,6 +210,102 @@
     {
         if (Pagination is null || !Pagination.HasNext) return;
         Page++;
+        await ReloadAsync();
+    }
+
+    private void ToggleNewUserRole(string role, bool on)
+    {
+        if (on)
+            NewUserRoles.Add(role);
+        else
+            NewUserRoles.Remove(role);
+    }
+
+    private async Task CreateUserAsync()
+    {
+        CreateError = string.Empty;
+        if (string.IsNullOrWhiteSpace(NewEmail) || string.IsNullOrWhiteSpace(NewPassword))
+        {
+            CreateError = "Nhập email và mật khẩu.";
+            return;
+        }
+
+        Guid? dept = null;
+        if (!string.IsNullOrWhiteSpace(NewDepartmentIdText))
+        {
+            if (!Guid.TryParse(NewDepartmentIdText.Trim(), out var d))
+            {
+                CreateError = "Phòng ban không phải Guid hợp lệ.";
+                return;
+            }
+
+            dept = d;
+        }
+
+        CreateBusy = true;
+        var (created, err) = await AdminUsersApi.CreateAsync(
+            NewEmail.Trim(),
+            NewPassword,
+            string.IsNullOrWhiteSpace(NewDisplayName) ? null : NewDisplayName.Trim(),
+            dept,
+            NewUserRoles.ToList());
+        CreateBusy = false;
+
+        if (created is null)
+        {
+            CreateError = string.IsNullOrWhiteSpace(err) ? "Tạo tài khoản thất bại." : err;
+            return;
+        }
+
+        NewEmail = string.Empty;
+        NewPassword = string.Empty;
+        NewDisplayName = string.Empty;
+        NewDepartmentIdText = string.Empty;
+        NewUserRoles.Clear();
+        Page = 1;
+        await ReloadAsync();
+    }
+
+    private async Task LockAsync(UserListItemDto u)
+    {
+        Banner = string.Empty;
+        var (ok, err) = await AdminUsersApi.LockAsync(u.Id);
+        if (!ok)
+        {
+            Banner = err ?? "Khóa tài khoản thất bại.";
+            return;
+        }
+
+        await ReloadAsync();
+    }
+
+    private async Task UnlockAsync(UserListItemDto u)
+    {
+        Banner = string.Empty;
+        var (ok, err) = await AdminUsersApi.UnlockAsync(u.Id);
+        if (!ok)
+        {
+            Banner = err ?? "Mở khóa thất bại.";
+            return;
+        }
+
+        await ReloadAsync();
+    }
+
+    private async Task DeleteAsync(UserListItemDto u)
+    {
+        var okJs = await JS.InvokeAsync<bool>("confirm", $"Xóa vĩnh viễn tài khoản {u.Email}?");
+        if (!okJs)
+            return;
+
+        Banner = string.Empty;
+        var (ok, err) = await AdminUsersApi.DeleteAsync(u.Id);
+        if (!ok)
+        {
+            Banner = err ?? "Xóa thất bại.";
+            return;
+        }
+
         await ReloadAsync();
     }
 

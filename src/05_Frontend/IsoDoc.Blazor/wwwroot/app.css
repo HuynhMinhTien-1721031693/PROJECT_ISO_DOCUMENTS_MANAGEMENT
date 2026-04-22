@@ -1,6 +1,13 @@
 html, body {
     margin: 0;
     font-family: Inter, "Segoe UI", Arial, sans-serif;
+    background: #0f1117;
+    color: #1f2937;
+}
+
+/* Trang công khai (login) — nền sáng tách khỏi shell ISO tối */
+.public-page {
+    min-height: 100vh;
     background: #f3f5f9;
     color: #1f2937;
 }

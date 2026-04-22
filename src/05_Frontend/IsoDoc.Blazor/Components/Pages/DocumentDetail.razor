@@ -43,6 +43,10 @@ else
     <section class="card" style="margin-top: 14px;">
         <h2 style="margin-bottom: 10px;">Thao tác</h2>
         <div class="action-row">
+            @if (Document.ActiveWorkflow is { } wf)
+            {
+                <a class="btn secondary" href="@($"/workflow/{wf.WorkflowId}")">Mở workflow phê duyệt</a>
+            }
             <button type="button" class="btn" disabled="@ActionBusy" @onclick="DownloadLatestAsync">Tải xuống (bản mới nhất)</button>
             @if (string.Equals(Document.Versions.OrderByDescending(v => v.UploadedAt).FirstOrDefault()?.FileType, "Pdf", StringComparison.OrdinalIgnoreCase))
             {

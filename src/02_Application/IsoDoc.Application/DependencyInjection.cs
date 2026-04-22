@@ -22,7 +22,14 @@ public static class DependencyInjection
         });
 
         services.AddValidatorsFromAssembly(assembly);
-        services.AddAutoMapper(assembly);
+        services.AddAutoMapper(cfg =>
+        {
+            var key = Environment.GetEnvironmentVariable("AUTOMAPPER_LICENSE_KEY");
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                cfg.LicenseKey = key;
+            }
+        }, typeof(DependencyInjection));
 
         return services;
     }

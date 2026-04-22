@@ -30,4 +30,19 @@ public sealed class UnsupportedUserAdministrationService : IUserAdministrationSe
         Task.FromResult(Result.Failure(
             "Quản lý người dùng cần SQL Server (DefaultConnection hoặc SqlServer).",
             "DATABASE_REQUIRED"));
+
+    public Task<Result> LockUserAsync(Guid id, Guid currentUserId, CancellationToken ct) =>
+        Task.FromResult(Result.Failure(
+            "Quản lý người dùng cần SQL Server (DefaultConnection hoặc SqlServer).",
+            "DATABASE_REQUIRED"));
+
+    public Task<Result> UnlockUserAsync(Guid id, CancellationToken ct) =>
+        Task.FromResult(Result.Failure(
+            "Quản lý người dùng cần SQL Server (DefaultConnection hoặc SqlServer).",
+            "DATABASE_REQUIRED"));
+
+    public Task<Result> DeleteUserAsync(Guid id, Guid currentUserId, CancellationToken ct) =>
+        Task.FromResult(Result.Failure(
+            "Quản lý người dùng cần SQL Server (DefaultConnection hoặc SqlServer).",
+            "DATABASE_REQUIRED"));
 }
