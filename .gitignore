@@ -27,3 +27,9 @@ src/04_WebAPI/IsoDoc.WebAPI/App_Data/
 
 ## Local-only overrides (copy from *.example)
 src/04_WebAPI/IsoDoc.WebAPI/appsettings.Development.json
+
+## Secrets and local env (use .env.example)
+.env
+
+## Local release archives (keep out of git; use Releases or nộp riêng)
+*.zip
